@@ -1,0 +1,36 @@
+{
+  "project": "FxSound-style Android Audio Enhancer",
+  "target_device": "Xiaomi 17",
+  "root_required": false,
+  "documents": [
+    "AGENTS.md",
+    "ANTIGRAVITY_MASTER_PROMPT.md",
+    "README.md",
+    "docs/ANDROID_AUDIO_FEASIBILITY.md",
+    "docs/ANDROID_M3_SKILL.md",
+    "docs/ANTIGRAVITY_WORKFLOW.md",
+    "docs/ARCHITECTURE.md",
+    "docs/DECISIONS.md",
+    "docs/DEFINITION_OF_DONE.md",
+    "docs/DSP_QUALITY_SPEC.md",
+    "docs/FEASIBILITY_REPORT_TEMPLATE.md",
+    "docs/FXSOUND_DSP_PORT.md",
+    "docs/HAPTICS_SPEC.md",
+    "docs/IMPLEMENTATION_LOG.md",
+    "docs/LICENSING_AND_ATTRIBUTION.md",
+    "docs/PRODUCT_REQUIREMENTS.md",
+    "docs/ROADMAP_AND_TASKS.md",
+    "docs/TEST_PLAN.md",
+    "docs/UI_UX_SPEC.md"
+  ],
+  "note": "Specification pack only; does not contain the FxSound upstream source or a compiled APK.",
+  "required_ui_stack": [
+    "Kotlin",
+    "Jetpack Compose",
+    "Material 3"
+  ],
+  "recommended_antigravity_skills": [
+    "M3 Skill",
+    "Android Official Skill"
+  ]
+}
