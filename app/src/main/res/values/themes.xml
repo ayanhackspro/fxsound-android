@@ -1,0 +1,7 @@
+<resources>
+    <style name="Theme.FxSoundAndroid" parent="android:Theme.Material.NoActionBar">
+        <item name="android:statusBarColor">#0B0F17</item>
+        <item name="android:navigationBarColor">#131A26</item>
+        <item name="android:windowBackground">#0B0F17</item>
+    </style>
+</resources>
