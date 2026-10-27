@@ -961,3 +961,30 @@ to `strings.xml` with 11sp minimum body copy and canvas/stepper content descript
 
 **Still pending:** Xiaomi 17 / real Spotify-session listening and on-device verification of
 the platform band bandwidth. Nothing in this pass validates the audible result on hardware.
+
+### 2026-10-27 - Launcher Icon From Icon.png
+- **Summary:** Replaced the placeholder cyan-bars vector icon with the supplied
+  Icon.png artwork (white level bars + Android head on black). The supply is a flat
+  1254px squircle on black, so it is not usable as-is: modern launchers mask adaptive
+  icons and would have cropped the artwork and/or shown a grey box around it.
+- **What ships:** mipmap-xxxhdpi/ic_launcher_foreground.png (432px, single density -
+  Android scales down), the artwork cropped from the plate (255,329-1103,874) with a
+  luminance->alpha ramp (90..130) so the near-black plate and the bars' cast shadows
+  become transparent, composited at 52% of the 108dp canvas to stay inside the 66dp
+  adaptive safe circle. drawable/ic_launcher_background.xml is now pure #000000;
+  both adaptive XMLs point foreground and monochrome at that PNG (themed icons tint its
+  alpha into a silhouette). The old drawable/ic_launcher_foreground.xml vector is
+  deleted (unreferenced). No PNGs are needed for API < 26 because minSdk = 29.
+- **Files changed:** mipmap-anydpi-v26/ic_launcher.xml, ic_launcher_round.xml,
+  drawable/ic_launcher_background.xml (deleted drawable/ic_launcher_foreground.xml),
+  mipmap-xxxhdpi/ic_launcher_foreground.png.
+- **Commands run and actual results:**
+  - .\gradlew.bat assembleDebug --no-daemon -q: BUILD SUCCESSFUL (only the usual
+    SDK-XML-version warning). APK contains exactly one icon asset:
+    es/mipmap-xxxhdpi-v4/ic_launcher_foreground.png.
+  - Mocked the launcher mask offline (circle + squircle composites at 512px) to confirm
+    the art is centered and unclipped; this is a render check, not an on-device check.
+- **Notes:** Icon.png stays untracked (it is the source asset, not a build input).
+  The artwork includes the Android robot, which Google licenses under CC BY 3.0; credit
+  it in the store listing if this icon is published.
+- **Still pending:** no on-device launcher check (no device connected).
