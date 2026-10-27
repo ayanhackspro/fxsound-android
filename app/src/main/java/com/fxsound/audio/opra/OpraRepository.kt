@@ -95,6 +95,13 @@ class OpraRepository(private val context: Context) {
     suspend fun loadOrRefresh(forceNetwork: Boolean): LoadState = kotlinx.coroutines.withContext(
         kotlinx.coroutines.Dispatchers.IO
     ) {
+        // Re-entering the tab must not re-index a catalogue we already have in memory:
+        // indexing the 12.6 MB dump takes seconds and the previous code repeated it on
+        // every visit, so the screen showed "Indexing" each time it was opened.
+        if (!forceNetwork) {
+            val current = _loadState.value
+            if (current is LoadState.Ready && indexedCache != null) return@withContext current
+        }
         cacheMutex.withLock {
             val hadCache = databaseFile.isFile
             _loadState.value = LoadState.Loading(

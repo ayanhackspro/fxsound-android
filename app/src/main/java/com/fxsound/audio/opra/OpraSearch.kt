@@ -63,4 +63,31 @@ internal object OpraSearch {
             .take(limit)
             .map { it.first.entry }
     }
+
+    /**
+     * Advisory only: true when two results collapse to the same family, e.g. "Major",
+     * "Major II", "Major III" or an ANC on/off pair. The UI uses this to warn before the
+     * user applies the wrong variant; it never filters or reorders results.
+     */
+    fun hasVariantFamilies(entries: List<CatalogueEntry>): Boolean {
+        if (entries.size < 2) return false
+        val keys = entries.map { familyKey(it.product.name) }
+        return keys.size != keys.toSet().size
+    }
+
+    /**
+     * Family key: drops the "(brand)" suffix and common variant markers. Heuristic on
+     * purpose — a wrong grouping can only produce an extra warning, never a wrong profile.
+     */
+    fun familyKey(name: String): String = name
+        .substringBefore(" (")
+        .replace(VARIANT_MARKERS, " ")
+        .replace(Regex("[^A-Za-z0-9]+"), " ")
+        .trim()
+        .lowercase(Locale.ROOT)
+
+    private val VARIANT_MARKERS = Regex(
+        "\\b(ii|iii|iv|v|anc|bt|wireless|pro|max|plus|gen|mk\\s*\\d)\\b",
+        RegexOption.IGNORE_CASE
+    )
 }

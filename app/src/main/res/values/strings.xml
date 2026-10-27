@@ -25,8 +25,8 @@
     <string name="opra_profile_by">Profile by %1$s</string>
     <string name="opra_measurement_source">Measurement source ↗</string>
     <string name="opra_profile_meta">Preamp %1$s dB · %2$d bands</string>
-    <string name="opra_profile_meta_shelf"> · %1$d shelf (approximated)</string>
-    <string name="opra_profile_meta_unsupported"> · %1$d unsupported</string>
+    <string name="opra_profile_meta_shelf">%1$d shelf (approximated)</string>
+    <string name="opra_profile_meta_unsupported">%1$d unsupported</string>
     <string name="opra_profile_unparseable">This profile could not be parsed — it is shown but not offered.</string>
     <string name="opra_profile_unrenderable">This profile cannot be rendered (it exceeds the band limit or has no usable filters).</string>
     <string name="opra_ideal_preview">Ideal peaking model (not measured on the device)</string>
@@ -42,4 +42,23 @@
     <string name="opra_decrease">Decrease %1$s by 0.5 dB</string>
     <string name="opra_increase">Increase %1$s by 0.5 dB</string>
     <string name="opra_curve_description">Predicted EQ response curve for the selected profile</string>
+    <string name="opra_clear_search">Clear search</string>
+    <string name="opra_settings_heading">PROFILES</string>
+    <string name="opra_chart_axis_20">20</string>
+    <string name="opra_chart_axis_100">100</string>
+    <string name="opra_chart_axis_1k">1k</string>
+    <string name="opra_chart_axis_10k">10k</string>
+    <string name="opra_chart_axis_20k">20k Hz</string>
+    <string name="opra_vendor_meta">%1$s - %2$d profiles</string>
+    <string name="opra_delete_short">Delete data</string>
+    <string name="opra_all_headphones">All headphones</string>
+    <string name="opra_applied_tag">APPLIED</string>
+    <plurals name="opra_profile_count">
+        <item quantity="one">%1$d profile</item>
+        <item quantity="other">%1$d profiles</item>
+    </plurals>
+    <string name="opra_pending_tag">PENDING</string>
+    <string name="opra_status_credit">%1$s \u2014 %2$s</string>
+    <string name="opra_pending_hint">Applies when a music player attaches its audio session.</string>
+    <string name="opra_remove_short">Remove</string>
 </resources>

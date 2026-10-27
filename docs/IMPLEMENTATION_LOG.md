@@ -988,3 +988,48 @@ the platform band bandwidth. Nothing in this pass validates the audible result o
   The artwork includes the Android robot, which Google licenses under CC BY 3.0; credit
   it in the store listing if this icon is published.
 - **Still pending:** no on-device launcher check (no device connected).
+
+### 2026-10-27 - Phones Screen Rebuild (layout bug, cache re-index, honest states)
+- **Summary:** The headphone-tuning screen was rebuilt after a device screenshot showed the
+  licence card filling half the screen, oversized search field, and rows that dropped the
+  brand or claimed "1 profiles". Three real defects were found and fixed, not just restyled.
+- **Root cause of the stretched card:** four TextButtons were laid out in one unbounded
+  Row. "Delete downloaded data" could not fit at 320 dp width, so it wrapped to ~10 lines,
+  forcing the card to 987 px tall with ~250 dp of empty space. Verified with
+  uiautomator dump bounds before the fix. Links now sit on their own row, refresh is an
+  icon button, and the delete label is short.
+- **Second defect: re-index on every visit.** OpraRepository.loadOrRefresh(forceNetwork =
+  false) re-ran the full 12.6 MB index each time the tab was opened because it only checked
+  the file, not the in-memory catalogue. It now returns early when the state is Ready and
+  the index is populated; measured re-entry is instant (search field present immediately,
+  no "Indexing" line).
+- **Third defect: false APPLIED state.** Selecting a profile showed a green APPLIED pill
+  before the renderer had attached anything. Selection now shows an amber PENDING pill
+  ("applies when a music player attaches its audio session") and green is reserved for
+  isHeadphonePlanApplied.
+- **Other UI changes:** single LazyColumn for header/attribution/search/plan/results;
+  search field with leading icon and clear button; result rows prepend the vendor only when
+  the name does not already contain it (Daiso $2 earphones keeps its name); profile
+  counts use a plural resource; variant-family warning is advisory, moved into
+  OpraSearch.hasVariantFamilies with unit tests; chart gained +/-12/0 dB grid labels and
+  the 0 dB label is offset above its reference line; slider steps = 0 (the 0.5 dB steps
+  were not selectable with steps = 11 over -6..6).
+- **New colour tokens (screen-local):** PendingAmber #FFB74D and AppliedGreen #4CAF50.
+  The shared AmberAccent is an alias of the crimson brand colour, which read as an error.
+- **Files changed:** ui/screens/OpraScreen.kt (rewritten), opra/OpraSearch.kt
+  (hasVariantFamilies, amilyKey), opra/OpraRepository.kt (early return),
+  es/values/strings.xml (opra_* strings, opra_profile_count plural),
+  es/drawable/ic_search.xml, es/drawable/ic_close.xml,
+  	est/.../OpraSearchTest.kt (+3 tests).
+- **Commands run and actual results:**
+  - `.\gradlew.bat testDebugUnitTest assembleDebug --no-daemon`: BUILD SUCCESSFUL.
+    82 tests, 0 failures, 1 skipped (OpraDatasetSmokeTest, needs the full dump).
+  - Installed on emulator Medium_Phone_API_37.0 (1080x2400, 420 dpi) and checked the browse
+    list, a filtered search, the product detail pane and the pending state with screenshots
+    and uiautomator dump bounds.
+- **Notes:** aapt strips leading whitespace from string resources, so the " · " separators in
+  the profile meta line are added in code rather than inside the strings.
+- **Still pending:** on-device audio validation on the Xiaomi 17 (no device connected); the
+  PENDING -> APPLIED transition was only checked against the emulator's companion service.
+
+---

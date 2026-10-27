@@ -84,4 +84,34 @@ class OpraSearchTest {
     fun `limit is enforced`() {
         assertEquals(2, OpraSearch.rank(OpraSearch.items(catalogue), "a", limit = 2).size)
     }
+
+    @Test
+    fun `numbered variants and anc pairs are recognised as one family`() {
+        val majors = listOf(
+            entry("Major", "Marshall"),
+            entry("Major II", "Marshall"),
+            entry("Major III", "Marshall")
+        )
+        assertTrue(OpraSearch.hasVariantFamilies(majors))
+
+        val ancPair = search("wh-1000xm4")
+        assertTrue(OpraSearch.hasVariantFamilies(ancPair))
+    }
+
+    @Test
+    fun `distinct models are not flagged as variants`() {
+        val distinct = listOf(entry("HD 600", "Sennheiser"), entry("HD 650", "Sennheiser"))
+        assertTrue(!OpraSearch.hasVariantFamilies(distinct))
+
+        val single = listOf(entry("Sundara", "HiFiMan"))
+        assertTrue(!OpraSearch.hasVariantFamilies(single))
+    }
+
+    @Test
+    fun `family key ignores brand suffix and variant markers`() {
+        assertEquals("major", OpraSearch.familyKey("Major II"))
+        assertEquals("major", OpraSearch.familyKey("Major"))
+        assertEquals("wh 1000xm4", OpraSearch.familyKey("WH-1000XM4 (ANC on)"))
+        assertEquals("mid", OpraSearch.familyKey("MID ANC"))
+    }
 }
