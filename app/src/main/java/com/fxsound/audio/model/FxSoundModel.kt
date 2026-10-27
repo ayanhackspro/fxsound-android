@@ -201,8 +201,27 @@ data class FxSoundUiState(
     /** Transient: the OPRA headphone plan for the companion path; restored via its own persistence. */
     val headphonePlan: com.fxsound.audio.opra.HeadphoneEqPlan? = null,
     /** Transient: true only after the companion service confirms the DSP attach. */
-    val isHeadphonePlanApplied: Boolean = false
+    val isHeadphonePlanApplied: Boolean = false,
+    /** Transient: which renderer actually carries the EQ, and how many bands it exposes. */
+    val eqRenderer: EqRendererInfo = EqRendererInfo()
 )
+
+/** Which equalizer stage the companion service actually attached to the live session. */
+enum class EqRendererKind { UNKNOWN, NONE, DYNAMICS_PROCESSING, PLATFORM_EQUALIZER }
+
+/**
+ * Reporting, not a claim: the UI shows what was attached so a "slider does nothing" report
+ * can be traced to the renderer. [bandCount] is the number of bands the renderer really
+ * has, which on the platform `Equalizer` fallback is often far fewer than the 10 sliders.
+ */
+data class EqRendererInfo(
+    val kind: EqRendererKind = EqRendererKind.UNKNOWN,
+    val bandCount: Int = 0
+) {
+    /** True when the sliders are being squeezed onto fewer bands than the console shows. */
+    val isBandCollapsed: Boolean
+        get() = kind == EqRendererKind.PLATFORM_EQUALIZER && bandCount in 1..9
+}
 
 /**
  * Attach-state transition for the OPRA headphone plan (B2): APPLIED is only ever true

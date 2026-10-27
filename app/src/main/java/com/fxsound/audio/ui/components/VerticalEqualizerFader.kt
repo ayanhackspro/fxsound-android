@@ -16,7 +16,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -30,6 +32,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -66,12 +71,92 @@ fun VerticalEqualizerFader(
     enabled: Boolean = true,
     valueRange: ClosedFloatingPointRange<Float> = -14.0f..14.0f
 ) {
-    var lastTapTime by remember { mutableLongStateOf(0L) }
+    // Time of the last completed *tap*. A tap only counts once the pointer goes up again
+    // without moving, so a quick second drag can never be mistaken for a double tap.
+    var lastTapUpTime by remember { mutableLongStateOf(0L) }
+    // The track Canvas measures itself, and the Column measures itself; mapping the pointer
+    // through those two coordinate spaces is the only way to know where the finger is
+    // relative to the drawn track (see gainAtPointer).
+    var trackCoords by remember { mutableStateOf<LayoutCoordinates?>(null) }
+    var columnCoords by remember { mutableStateOf<LayoutCoordinates?>(null) }
+    var lastTickDb by remember { mutableFloatStateOf(Float.NaN) }
+    // The Canvas insets the track by half a thumb at each end, so the touch mapping must use
+    // the same inset or the cap drifts away from the finger.
+    val trackInsetPx = with(LocalDensity.current) { 8.dp.toPx() }
 
     Column(
         modifier = modifier
             .fillMaxHeight()
-            .padding(vertical = 4.dp),
+            .padding(vertical = 4.dp)
+            .onGloballyPositioned { columnCoords = it }
+            // The whole column is the control: the previous version only accepted touches on
+            // the 4 dp track slot, which made the narrow high-frequency faders hard to grab.
+            .pointerInput(enabled) {
+                if (!enabled) return@pointerInput
+                val slop = viewConfiguration.touchSlop
+                // Pointer position -> dB, evaluated against the drawn track, not the column.
+                fun gainAtPointer(position: Offset): Float {
+                    val track = trackCoords
+                    val column = columnCoords
+                    if (track == null || column == null || track.size.height <= 0) return gain
+                    val y = track.windowToLocal(column.localToWindow(position)).y
+                    val height = track.size.height.toFloat()
+                    val usable = height - 2f * trackInsetPx
+                    if (usable <= 0f) return gain
+                    val fraction = ((height - trackInsetPx - y) / usable).coerceIn(0f, 1f)
+                    return valueRange.start +
+                        fraction * (valueRange.endInclusive - valueRange.start)
+                }
+                fun moveTo(position: Offset) {
+                    val newGain = gainAtPointer(position)
+                    if (!newGain.isNaN() && kotlin.math.abs(newGain - lastTickDb) >= 0.25f) {
+                        lastTickDb = newGain
+                        hapticsManager.performSliderTick(
+                            newGain,
+                            valueRange.start,
+                            valueRange.endInclusive
+                        )
+                    }
+                    onGainChange(newGain)
+                }
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                    down.consume()
+                    val downAt = System.currentTimeMillis()
+                    var travelled = 0f
+                    var isDrag = false
+                    lastTickDb = Float.NaN
+                    moveTo(down.position)
+
+                    while (true) {
+                        val event = awaitPointerEvent(pass = PointerEventPass.Initial)
+                        val change = event.changes.firstOrNull { it.id == down.id }
+                            ?: event.changes.firstOrNull()
+                            ?: break
+                        if (!change.pressed) {
+                            val upAt = System.currentTimeMillis()
+                            val wasTap = !isDrag && travelled <= slop && upAt - downAt <= 250
+                            if (wasTap && upAt - lastTapUpTime <= 300) {
+                                // A real double tap: snap this band back to flat.
+                                hapticsManager.performResetConfirmation()
+                                onGainChange(0f)
+                                lastTapUpTime = 0L
+                            } else {
+                                lastTapUpTime = if (wasTap) upAt else 0L
+                                // A finger lifts at a real position; honour it, so a quick
+                                // flick settles exactly where the user let go instead of on
+                                // the last move event the system happened to deliver.
+                                if (isDrag) moveTo(change.position)
+                            }
+                            break
+                        }
+                        change.consume()
+                        travelled = (change.position - down.position).getDistance()
+                        if (travelled > slop) isDrag = true
+                        moveTo(change.position)
+                    }
+                }
+            },
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.SpaceBetween
     ) {
@@ -115,48 +200,7 @@ fun VerticalEqualizerFader(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
-                .pointerInput(enabled) {
-                    if (!enabled) return@pointerInput
-                    awaitEachGesture {
-                        val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
-                        down.consume()
-
-                        val now = System.currentTimeMillis()
-                        // Double tap detection (< 300ms) snaps band to 0.0 dB
-                        if (now - lastTapTime < 300L) {
-                            hapticsManager.performResetConfirmation()
-                            onGainChange(0.0f)
-                            lastTapTime = 0L
-                            return@awaitEachGesture
-                        } else {
-                            lastTapTime = now
-                        }
-
-                        val h = size.height.toFloat()
-                        if (h > 0) {
-                            val fraction = 1.0f - (down.position.y / h).coerceIn(0.0f, 1.0f)
-                            val newGain = valueRange.start + fraction * (valueRange.endInclusive - valueRange.start)
-                            hapticsManager.performSliderTick(newGain, valueRange.start, valueRange.endInclusive)
-                            onGainChange(newGain)
-                        }
-
-                        while (true) {
-                            val event = awaitPointerEvent(pass = PointerEventPass.Initial)
-                            val change = event.changes.firstOrNull { it.id == down.id }
-                                ?: event.changes.firstOrNull()
-                                ?: break
-                            if (!change.pressed) break
-                            change.consume()
-
-                            if (h > 0) {
-                                val fraction = 1.0f - (change.position.y / h).coerceIn(0.0f, 1.0f)
-                                val newGain = valueRange.start + fraction * (valueRange.endInclusive - valueRange.start)
-                                hapticsManager.performSliderTick(newGain, valueRange.start, valueRange.endInclusive)
-                                onGainChange(newGain)
-                            }
-                        }
-                    }
-                }
+                .onGloballyPositioned { coords -> trackCoords = coords }
         ) {
             Canvas(modifier = Modifier.fillMaxHeight().fillMaxWidth()) {
                 val canvasWidth = size.width

@@ -3,6 +3,7 @@ package com.fxsound.audio.data
 import android.content.Context
 import com.fxsound.audio.model.AcousticMetrics
 import com.fxsound.audio.model.AudioOutputDeviceType
+import com.fxsound.audio.model.EqRendererInfo
 import com.fxsound.audio.model.FxSoundEffectId
 import com.fxsound.audio.model.FxSoundPreset
 import com.fxsound.audio.model.FxSoundUiState
@@ -276,6 +277,15 @@ object FxSoundRepository {
     fun setOutputDevice(deviceType: AudioOutputDeviceType) {
         _uiState.update { it.copy(outputDevice = deviceType) }
         notifyStateChanged()
+    }
+
+    /**
+     * Records which renderer the companion service attached. Deliberately does NOT call
+     * [notifyStateChanged]: this is reported *by* the service, so echoing it back would
+     * re-enter the update loop that produced it. The UI collects [uiState] directly.
+     */
+    fun setEqRenderer(info: EqRendererInfo) {
+        _uiState.update { it.copy(eqRenderer = info) }
     }
 
     /**

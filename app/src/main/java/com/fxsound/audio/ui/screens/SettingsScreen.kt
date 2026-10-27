@@ -1,4 +1,4 @@
-﻿package com.fxsound.audio.ui.screens
+package com.fxsound.audio.ui.screens
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -47,6 +47,8 @@ import com.fxsound.audio.R
 import com.fxsound.audio.data.FxSoundRepository
 import com.fxsound.audio.engine.DynamicsProcessingTranslator
 import com.fxsound.audio.haptics.HapticsManager
+import com.fxsound.audio.model.EqRendererKind
+import com.fxsound.audio.model.FxSoundUiState
 import com.fxsound.audio.model.HapticsMode
 import com.fxsound.audio.model.LatencyMode
 import com.fxsound.audio.model.RouteStatus
@@ -56,6 +58,7 @@ import com.fxsound.audio.ui.theme.DarkBackground
 import com.fxsound.audio.ui.theme.DarkSurfaceCard
 import com.fxsound.audio.ui.theme.DarkSurfaceElevated
 import com.fxsound.audio.ui.theme.FxRedPrimary
+import com.fxsound.audio.ui.theme.PendingAmber
 import com.fxsound.audio.ui.theme.TextDisabled
 import com.fxsound.audio.ui.theme.TextPrimary
 import com.fxsound.audio.ui.theme.TextSecondary
@@ -350,6 +353,18 @@ fun SettingsScreen(
                 DiagnosticRow("Audio Route", state.routeStatus.label)
                 DiagnosticRow("Active Package", state.activePackageName ?: "None (Awaiting Session)")
                 DiagnosticRow("Session ID", if (state.activeAudioSessionId != 0) state.activeAudioSessionId.toString() else "None")
+                DiagnosticRow("EQ Renderer", eqRendererLabel(state))
+                if (state.eqRenderer.isBandCollapsed) {
+                    Text(
+                        text = "This device's system equalizer exposes only " +
+                            "${state.eqRenderer.bandCount} bands, so the 10 faders are combined onto " +
+                            "them. Neighbouring high bands (8k, 16k) can share one band and may sound alike.",
+                        color = PendingAmber,
+                        fontSize = 10.sp,
+                        lineHeight = 14.sp,
+                        modifier = Modifier.padding(bottom = 6.dp)
+                    )
+                }
                 DiagnosticRow("AudioFlinger DUMP", if (state.isEnhancedTrackingGranted) "Granted (Session Tracking)" else "Standard (Not Granted)")
                 DiagnosticRow("Native C++ Library", if (FxSoundNativeBridge.isNativeAvailable()) "Loaded (arm64-v8a / x86_64)" else "Unavailable")
                 DiagnosticRow("Latency Buffer", if (state.latencyMode == LatencyMode.LOW_LATENCY) "Low Latency (Fast)" else "Hi-Fi Studio")
@@ -484,4 +499,13 @@ private fun DiagnosticRow(label: String, value: String) {
             modifier = Modifier.weight(1.4f, fill = false)
         )
     }
+}
+
+/** What the EQ is actually attached to, for the diagnostics card. */
+private fun eqRendererLabel(state: FxSoundUiState): String = when (state.eqRenderer.kind) {
+    EqRendererKind.DYNAMICS_PROCESSING -> "DynamicsProcessing (10 bands)"
+    EqRendererKind.PLATFORM_EQUALIZER ->
+        "Platform Equalizer (" + state.eqRenderer.bandCount + " bands)"
+    EqRendererKind.NONE -> "None (no session attached)"
+    EqRendererKind.UNKNOWN -> "Not attached yet"
 }

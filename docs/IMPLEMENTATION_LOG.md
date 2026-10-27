@@ -1033,3 +1033,71 @@ the platform band bandwidth. Nothing in this pass validates the audible result o
   PENDING -> APPLIED transition was only checked against the emulator's companion service.
 
 ---
+
+
+### 2026-10-28 - Equalizer Faders: Double-Tap Swallow, Edge-Gesture Steal, Renderer Reporting
+- **User report:** "can't control the last 2-3 sticks on equalizer, it doesn't affect audio at all."
+- **Interaction defects found (all reproduced on the emulator, none of them cosmetic):**
+  1. **Double-tap swallowed a drag.** `VerticalEqualizerFader` treated *any* second touch
+     within 300 ms of the previous touch-down as a double tap and snapped the band to 0 dB
+     before reading the pointer. A quick nudge after touching a fader therefore reset the
+     band instead of moving it, which reads as "the stick won't stay where I put it." A tap
+     now counts only when the pointer goes up again without travelling past `touchSlop`
+     within 250 ms, so a second drag can never be mistaken for a double tap.
+  2. **The right system-gesture strip sat on top of the last two faders.** `dumpsys window
+     displays` reports the emulator's right `systemGestures` inset as `frame=[1002,0]
+     [1080,2400]` (78 px = 30 dp); the 16k fader column spans roughly 944-1037 px. On any
+     gesture-nav phone (the Xiaomi included) a drag that starts in the right half of the 8k
+     or 16k column is a back-gesture candidate, so the system could take the gesture. The
+     fader row now calls `Modifier.systemGestureExclusion()`. Verified: an `input swipe`
+     starting at x = 1030 drags the 16k fader (4.1 dB -> 5.6 dB) and does not navigate back.
+  3. **Only the 4 dp track slot was tappable.** The whole column (badge, track, frequency
+     label) is now the control, which is what a 40 px-wide fader needs on a phone.
+  4. **Pointer-to-gain mapping measured against the wrong box.** The touch mapping used
+     `positionInParent()` of the Canvas while the Canvas draws its track inset by half a
+     thumb at each end, so the cap and the finger disagreed by ~1 dB. The mapping is now
+     done in one coordinate space: the pointer is converted through the column's
+     `LayoutCoordinates` into the track's local space, and the same 8 dp inset is applied
+     to both. Measured after the fix: 0 dB at y = 1099 px, +14 dB at y = 874 px
+     (16.1 px/dB), and a lifted drag settles exactly on the release position (fast 200 ms
+     swipe 1150 -> 900 px lands on +12.3 dB against a nominal +12.4).
+- **Why the audio may not change (now visible in the app instead of assumed):**
+  - New `EqRendererInfo(kind, bandCount)` is reported by `SessionCompanionService` on
+    session 0, on every attached session and on teardown, and shown in Settings -> Audio
+    Engine Diagnostics as **EQ Renderer**. If the platform `android.media.audiofx.Equalizer`
+    fallback exposes fewer than 10 bands (5 is common on OEM builds), the diagnostics row
+    turns amber and the Equalizer screen itself prints a note under the console: the top
+    faders share one band and move together.
+  - The platform-EQ fallback now interpolates the 10 sliders onto the device's own band
+    centres in **log frequency** (`PlatformEqMapper`, octave weighting) instead of linear
+    hertz, which under-weighted every band above 1 kHz. A linear ramp put only 75 % of the
+    16k slider onto a 14 kHz OEM band; the octave ramp puts 81 % and, more importantly,
+    behaves like the console between bands.
+  - `DynamicsProcessing.EqBand` is left without an explicit Q: the platform chooses its
+    own bandwidth and ignores the modelled Q on the external-session path (see the ADR-028
+    amendment), so passing one would only be decoration.
+- **Files changed:** ui/components/VerticalEqualizerFader.kt (gesture rewrite, coordinate
+  mapping, release-position settle), ui/screens/EqualizerScreen.kt
+  (`systemGestureExclusion`, collapsed-band note), ui/screens/SettingsScreen.kt
+  (EQ Renderer row + amber caution + `eqRendererLabel`), model/FxSoundModel.kt
+  (`EqRendererKind`, `EqRendererInfo`), data/FxSoundRepository.kt (`setEqRenderer`),
+  service/SessionCompanionService.kt (`reportEqRenderer`), engine/PlatformEqMapper.kt (new),
+  ui/theme/Color.kt (shared `PendingAmber` / `AppliedGreen`), ui/screens/OpraScreen.kt
+  (imports the shared colours), test/.../PlatformEqMapperTest.kt (6 tests).
+- **Commands run and actual results:**
+  - `.\gradlew.bat testDebugUnitTest assembleDebug --no-daemon`: BUILD SUCCESSFUL.
+    87 tests, 0 failures, 1 skipped (`OpraDatasetSmokeTest`, needs the full dump).
+  - `.\gradlew.bat testDebugUnitTest assembleRelease --no-daemon`: BUILD SUCCESSFUL.
+    `app/build/outputs/apk/release/app-release.apk` = 3,916,362 bytes.
+  - Emulator Medium_Phone_API_37.0 (1080x2400, 420 dpi), debug and release: fader taps and
+    drags on 4k/8k/16k move the readouts and the curve, two quick drags in a row no longer
+    zero the band, a drag inside the right gesture strip is not stolen, double-tap-to-zero
+    still works (8k 9.2 dB -> 0.0 dB). Settings shows "EQ Renderer: None (no session
+    attached)" when no player is running, which is the honest state.
+- **Not verified:** audibility. The emulator has no audio output and the Xiaomi 17 was not
+  connected, so "the high bands do nothing" is still unconfirmed on the target device. The
+  renderer row is what to read there first: DynamicsProcessing (10 bands) means the sliders
+  reach the DSP, Platform Equalizer (N bands) with N < 10 means they are being combined, and
+  None means no session is attached at all. Note also that Bluetooth codecs low-pass the
+  source (SBC around 17 kHz, many AAC paths around 16 kHz), so a 16 kHz boost can be
+  physically inaudible on a wireless headset even when the DSP applies it correctly.

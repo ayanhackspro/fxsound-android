@@ -26,7 +26,10 @@ import com.fxsound.audio.MainActivity
 import com.fxsound.audio.data.FxSoundRepository
 import com.fxsound.audio.engine.DynamicsProcessingTranslator
 import com.fxsound.audio.engine.FxSoundResponseTables
+import com.fxsound.audio.engine.PlatformEqMapper
 import com.fxsound.audio.model.AudioOutputDeviceType
+import com.fxsound.audio.model.EqRendererInfo
+import com.fxsound.audio.model.EqRendererKind
 import com.fxsound.audio.model.FxSoundEffectId
 import com.fxsound.audio.model.FxSoundPreset
 import com.fxsound.audio.model.FxSoundUiState
@@ -383,6 +386,7 @@ class SessionCompanionService : Service() {
         }
 
         activeSessions[0] = session
+        reportEqRenderer(session)
     }
 
     private fun applyEqualizerBands(eq: Equalizer, eqGains: List<Float>, clarity: Float) {
@@ -393,7 +397,7 @@ class SessionCompanionService : Service() {
 
         for (band in 0 until numBands) {
             val centerFreqHz = eq.getCenterFreq(band.toShort()) / 1000 // mHz to Hz
-            val userGain = interpolateEqGainForFreq(centerFreqHz, eqGains)
+            val userGain = PlatformEqMapper.gainAt(centerFreqHz, eqGains)
             // The measured upstream clarity response, evaluated at this band centre. The
             // platform Equalizer's bands sit at their own centres, so the table is
             // interpolated in log frequency rather than read band for band.
@@ -402,26 +406,9 @@ class SessionCompanionService : Service() {
                 centerFreqHz.toFloat()
             )
             val totalDb = (userGain + clarityBoost).coerceIn(-14.0f, 14.0f)
-            val millibels = (totalDb * 100).toInt().coerceIn(minLevel.toInt(), maxLevel.toInt()).toShort()
+            val millibels = PlatformEqMapper.millibels(totalDb, minLevel, maxLevel)
             eq.setBandLevel(band.toShort(), millibels)
         }
-    }
-
-    private fun interpolateEqGainForFreq(freqHz: Int, eqGains: List<Float>): Float {
-        val freqs = listOf(32, 64, 125, 250, 500, 1000, 2000, 4000, 8000, 16000)
-        if (freqHz <= freqs.first()) return eqGains.firstOrNull() ?: 0.0f
-        if (freqHz >= freqs.last()) return eqGains.lastOrNull() ?: 0.0f
-        for (i in 0 until freqs.size - 1) {
-            if (freqHz >= freqs[i] && freqHz <= freqs[i + 1]) {
-                val f1 = freqs[i].toFloat()
-                val f2 = freqs[i + 1].toFloat()
-                val t = (freqHz - f1) / (f2 - f1)
-                val g1 = eqGains.getOrElse(i) { 0.0f }
-                val g2 = eqGains.getOrElse(i + 1) { 0.0f }
-                return g1 + t * (g2 - g1)
-            }
-        }
-        return 0.0f
     }
 
     private fun onSessionOpened(sessionId: Int, packageName: String?) {
@@ -499,7 +486,7 @@ class SessionCompanionService : Service() {
             // not shown in the UI.
 
             activeSessions[sessionId] = session
-
+            reportEqRenderer(session)
             // Determine route status
             val routeStatus = if (packageName?.contains("spotify", ignoreCase = true) == true) {
                 RouteStatus.CONNECTED_SPOTIFY
@@ -681,6 +668,36 @@ class SessionCompanionService : Service() {
         activeSessions.clear()
         // No session can still have the plan attached (B2).
         FxSoundRepository.onHeadphoneAttachResult(false)
+        FxSoundRepository.setEqRenderer(
+            EqRendererInfo(
+                EqRendererKind.NONE,
+                0
+            )
+        )
+    }
+
+    /**
+     * Reports what the EQ is really running on. This is diagnostic, not a claim: a slider
+     * that "does nothing" can then be traced to either no attached renderer or a platform
+     * equalizer with fewer bands than the 10-band console, which is common on OEM builds.
+     */
+    private fun reportEqRenderer(session: ActiveSession) {
+        val info = when {
+            session.dynamicsProcessing != null -> EqRendererInfo(
+                EqRendererKind.DYNAMICS_PROCESSING,
+                10
+            )
+            session.equalizer != null -> EqRendererInfo(
+                EqRendererKind.PLATFORM_EQUALIZER,
+                runCatching { session.equalizer!!.numberOfBands.toInt() }.getOrDefault(0)
+            )
+            else -> EqRendererInfo(
+                EqRendererKind.NONE,
+                0
+            )
+        }
+        Log.i(TAG, "EQ renderer for session ${session.sessionId}: ${info.kind} (${info.bandCount} bands)")
+        FxSoundRepository.setEqRenderer(info)
     }
 
     private fun createNotificationChannel() {

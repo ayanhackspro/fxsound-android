@@ -74,12 +74,14 @@ import com.fxsound.audio.opra.OpraEqProfile
 import com.fxsound.audio.opra.OpraProfileConverter
 import com.fxsound.audio.opra.OpraRepository
 import com.fxsound.audio.opra.OpraSearch
+import com.fxsound.audio.ui.theme.AppliedGreen
 import com.fxsound.audio.ui.theme.BorderSubtle
 import com.fxsound.audio.ui.theme.DarkBackground
 import com.fxsound.audio.ui.theme.DarkSurface
 import com.fxsound.audio.ui.theme.DarkSurfaceElevated
 import com.fxsound.audio.ui.theme.FxRedDark
 import com.fxsound.audio.ui.theme.FxRedPrimary
+import com.fxsound.audio.ui.theme.PendingAmber
 import com.fxsound.audio.ui.theme.TextDisabled
 import com.fxsound.audio.ui.theme.TextPrimary
 import com.fxsound.audio.ui.theme.TextSecondary
@@ -91,14 +93,6 @@ import kotlin.math.ln
 import kotlin.math.pow
 import kotlin.math.sin
 import kotlinx.coroutines.launch
-
-/**
- * Warning/pending tone. The shared AmberAccent is an alias of the crimson brand colour,
- * which reads as an error, so this screen uses a distinct warm amber for "not applied yet"
- * and "pick the right variant" states, and green only once the renderer confirms.
- */
-private val PendingAmber: Color = Color(0xFFFFB74D)
-private val AppliedGreen: Color = Color(0xFF4CAF50)
 
 /**
  * OPRA (Open Profiles for Revealing Audio) headphone-tuning catalogue.

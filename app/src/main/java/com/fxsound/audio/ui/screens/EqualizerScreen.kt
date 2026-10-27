@@ -2,6 +2,7 @@ package com.fxsound.audio.ui.screens
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.systemGestureExclusion
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -47,6 +48,7 @@ import com.fxsound.audio.ui.theme.DarkSurfaceCard
 import com.fxsound.audio.ui.theme.DarkSurfaceElevated
 import com.fxsound.audio.ui.theme.DarkSurfaceVariant
 import com.fxsound.audio.ui.theme.FxRedPrimary
+import com.fxsound.audio.ui.theme.PendingAmber
 import com.fxsound.audio.ui.theme.TextDisabled
 import com.fxsound.audio.ui.theme.TextPrimary
 import com.fxsound.audio.ui.theme.TextSecondary
@@ -156,7 +158,11 @@ fun EqualizerScreen(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(240.dp),
+                        .height(240.dp)
+                        // The right-hand faders sit inside Android's back-gesture edge strip.
+                        // Excluding the console keeps an edge drag with the fader instead of
+                        // letting the system swallow it (and a fade is not a "go back").
+                        .systemGestureExclusion(),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     // Left dB Calibration Scale
@@ -188,6 +194,21 @@ fun EqualizerScreen(
                             modifier = Modifier.weight(1f)
                         )
                     }
+                }
+
+                // Honest renderer note: a platform equalizer with fewer bands than the
+                // console cannot move 8k and 16k independently, so say so where the faders
+                // are rather than only in Settings.
+                if (state.eqRenderer.isBandCollapsed) {
+                    Text(
+                        text = "This phone's system equalizer has ${state.eqRenderer.bandCount} " +
+                            "bands, so the 10 faders are combined onto them — the top bands " +
+                            "share one band and move together.",
+                        color = PendingAmber,
+                        fontSize = 10.sp,
+                        lineHeight = 14.sp,
+                        modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 10.dp)
+                    )
                 }
             }
         }

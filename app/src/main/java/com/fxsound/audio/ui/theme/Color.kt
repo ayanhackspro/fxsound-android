@@ -63,3 +63,9 @@ val TextDisabled = Color(0xFF4A4A4A)
 val SliderTrackActive = FxRedPrimary
 val SliderTrackInactive = Color(0xFF282828)
 val SliderThumb = Color(0xFFFFFFFF)
+
+// Renderer-state tones. The FxSound PC palette has no "pending" colour, and AmberAccent
+// is an alias of the crimson brand colour, which reads as an error, so the app's own
+// state badges use these instead: amber = staged/approximate, green = confirmed attached.
+val PendingAmber = Color(0xFFFFB74D)
+val AppliedGreen = Color(0xFF4CAF50)

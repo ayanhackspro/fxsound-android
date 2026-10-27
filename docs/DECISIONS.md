@@ -462,3 +462,45 @@ corrupt or hostile download can no longer destroy a working catalogue. Real-devi
 listening on the Xiaomi 17 remains pending; the Q values only affect the native renderer
 and the preview, while the gain scale affects the DynamicsProcessing path used for
 external sessions.
+
+## ADR-029: EQ Faders Own Their Own Gestures; the Attached Renderer Is Reported, Not Assumed
+
+**Context.** A device report said the last two or three equalizer faders "can't be
+controlled" and "don't affect audio at all". Three separate mechanisms could produce that
+symptom, and only one of them is in our UI: the gesture layer, the renderer that the
+companion service actually attached, and the audio content reaching that renderer.
+Guessing between them is what produced the earlier misdiagnosis in Step 12.
+
+**Decision.**
+
+1. **Interaction is owned by the fader, not the window manager.** A fader's whole column is
+   the touch target; taps only count as taps when the pointer is released without moving
+   past `touchSlop`; and the screen calls `systemGestureExclusion()` on the fader row. The
+   right-hand system-gesture strip is 30 dp wide on a gesture-nav phone and overlaps the
+   last fader columns, so without the exclusion a drag can be read as a back gesture. A
+   vertical fade is never navigation, so excluding the row costs the user nothing.
+2. **Pointer-to-gain conversion happens in one coordinate space.** The pointer is converted
+   from the column's `LayoutCoordinates` into the track Canvas's local space, and both the
+   drawing and the hit mapping use the same half-thumb inset. Mixing `positionInParent()`
+   with a Canvas that insets its own track makes the cap drift from the finger; on a fader
+   with a 14 px/dB scale a 1 dB error is invisible, but a mapping 100 px off makes the top
+   of the travel unreachable. A drag also applies its release position, so a flick settles
+   where the finger lifted rather than on the last move event delivered.
+3. **A renderer must say what it is.** `EqRendererInfo(kind, bandCount)` is published by the
+   service and surfaced in Settings, and the Equalizer screen prints an amber note when the
+   platform equalizer has fewer bands than the console. `DynamicsProcessing.EqBand` is not
+   given a Q: the platform picks its own bandwidth on the external-session path (ADR-028
+   amendment), so a Q parameter would misrepresent the render.
+4. **The 10 sliders are mapped onto foreign band centres in octaves, not hertz.**
+   `PlatformEqMapper` interpolates in log2(f): a 5-band OEM equalizer whose top band is
+   14 kHz receives 81 % of the 16k slider instead of the 75 % a linear ramp gives, and the
+   intermediate mapping matches how an EQ is actually laid out. The mapping is unit tested
+   at its edges, at the ISO centres, and in the collapsed case where two sliders share one
+   band.
+
+**Consequences.** The faders can no longer be stolen by the system or reset by a fast
+second touch, and the top of the travel produces the value it shows. What the sliders do to
+the audio still depends on the device: the diagnostics row distinguishes "no session",
+"platform equalizer with N bands" and "DynamicsProcessing (10 bands)" instead of implying
+success. Audibility on the Xiaomi 17 remains unverified — and on a Bluetooth route a 16 kHz
+boost can be filtered out by the codec regardless of what the DSP does.
