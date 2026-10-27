@@ -196,4 +196,57 @@ class DynamicsProcessingTranslatorTest {
         assertTrue("Headroom must grow with bass ($mid vs $high)", mid < high)
         assertTrue("Headroom must stay within the documented 0..6 dB band", high <= 6.0f)
     }
+
+    // --- OPRA headphone plans (ADR-028) ---------------------------------------
+
+    private fun plan(vararg bands: Pair<Float, Float>) = com.fxsound.audio.opra.HeadphoneEqPlan(
+        profileId = "test::profile",
+        author = "Test",
+        details = null,
+        link = null,
+        preampDb = -6f,
+        bands = bands.map { com.fxsound.audio.opra.DspEqBand(it.first, it.second, 1.0f) },
+        conversionNotes = emptyList()
+    )
+
+    @Test
+    fun testHeadphonePlanOwnsTheOnlyBassStage() {
+        val strategy = DynamicsProcessingTranslator.resolveBassStrategy(
+            hasDynamicsProcessing = true,
+            bassEffectValue = 10.0f,
+            headphonePlanActive = true
+        )
+        assertTrue(
+            "With an OPRA plan the Pre-EQ carries the headphone curve, not the FxSound bass contour",
+            !strategy.usesPreEqHyperBass
+        )
+        assertEquals(
+            "No standalone BassBoost may stack on top of the headphone curve",
+            0.toShort(),
+            strategy.standaloneBassBoostStrength
+        )
+    }
+
+    @Test
+    fun testHeadphonePlanCountsTowardsHeadroom() {
+        val flat = List(10) { 0.0f }
+        val baseline = DynamicsProcessingTranslator.calculateHeadroomCompensationDb(0.0f, flat, 0f)
+        val boosted = DynamicsProcessingTranslator.calculateHeadroomCompensationDb(
+            0.0f, flat, 0f,
+            plan(100f to 6f, 3000f to 3f)
+        )
+        assertTrue("Plan boosts must raise required headroom", boosted > baseline)
+        assertEquals("Headroom must stay capped at 6 dB", true, boosted <= 6.0f)
+    }
+
+    @Test
+    fun testNegativePlanDoesNotAddHeadroom() {
+        val flat = List(10) { 0.0f }
+        val baseline = DynamicsProcessingTranslator.calculateHeadroomCompensationDb(0.0f, flat, 0f)
+        val cut = DynamicsProcessingTranslator.calculateHeadroomCompensationDb(
+            0.0f, flat, 0f,
+            plan(100f to -8f, 3000f to -2f)
+        )
+        assertEquals("Cuts must not create headroom compensation", baseline, cut, 0.001f)
+    }
 }

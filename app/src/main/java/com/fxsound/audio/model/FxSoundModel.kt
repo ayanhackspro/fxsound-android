@@ -197,7 +197,11 @@ data class FxSoundUiState(
     val hapticsMode: HapticsMode = HapticsMode.SYSTEM_DEFAULT,
     val outputDevice: AudioOutputDeviceType = AudioOutputDeviceType.BUILTIN_SPEAKER,
     val latencyMode: LatencyMode = LatencyMode.STUDIO,
-    val isEnhancedTrackingGranted: Boolean = false
+    val isEnhancedTrackingGranted: Boolean = false,
+    /** Transient: the OPRA headphone plan for the companion path; restored via its own persistence. */
+    val headphonePlan: com.fxsound.audio.opra.HeadphoneEqPlan? = null,
+    /** Transient: true only after the companion service confirms the DSP attach. */
+    val isHeadphonePlanApplied: Boolean = false
 )
 
 enum class LatencyMode {

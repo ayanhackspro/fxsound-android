@@ -64,10 +64,16 @@ object DynamicsProcessingTranslator {
      *
      * @param hasDynamicsProcessing true when the session carries a DynamicsProcessing effect,
      *   whose Pre-EQ stage provides the HyperBass contour.
+     * @param headphonePlanActive true when an OPRA headphone plan owns the Pre-EQ; the
+     *   standalone BassBoost must then stay off as well (no duplicate low-frequency stage).
      */
-    fun resolveBassStrategy(hasDynamicsProcessing: Boolean, bassEffectValue: Float): BassStrategy {
-        if (hasDynamicsProcessing) {
-            return BassStrategy(usesPreEqHyperBass = true, standaloneBassBoostStrength = 0)
+    fun resolveBassStrategy(
+        hasDynamicsProcessing: Boolean,
+        bassEffectValue: Float,
+        headphonePlanActive: Boolean = false
+    ): BassStrategy {
+        if (headphonePlanActive || hasDynamicsProcessing) {
+            return BassStrategy(usesPreEqHyperBass = hasDynamicsProcessing && !headphonePlanActive, standaloneBassBoostStrength = 0)
         }
         val capped = minOf(
             translateBassBoost(bassEffectValue).toInt(),
@@ -82,12 +88,17 @@ object DynamicsProcessingTranslator {
     /**
      * Builds a comprehensive DynamicsProcessing.Config object representing current FxSound settings.
      * Uses VARIANT_FAVOR_TIME_RESOLUTION for phase accuracy and low-latency transient response.
+     *
+     * @param headphonePlan optional OPRA headphone-correction plan. It REPLACES the Pre-EQ
+     *   bass contour while active — the headphone curve is then the single low-frequency
+     *   stage (ADR-019 single-bass rule) and the standalone BassBoost stays off.
      */
     fun buildDynamicsConfig(
         isPowerOn: Boolean,
         effects: Map<FxSoundEffectId, Float>,
         eqGains: List<Float>,
-        masterGainDb: Float = 0.0f
+        masterGainDb: Float = 0.0f,
+        headphonePlan: com.fxsound.audio.opra.HeadphoneEqPlan? = null
     ): Config {
         val clarity = effects[FxSoundEffectId.FIDELITY] ?: 5.0f
         val dynamicBoost = effects[FxSoundEffectId.DYNAMIC_BOOST] ?: 4.0f
@@ -98,10 +109,22 @@ object DynamicsProcessingTranslator {
         // 1. Channel Pre-EQ (Pre-emphasis & HyperBass shaping)
         // The band gains are the upstream DSP's measured bass response rather than a
         // hand-authored approximation. See FxSoundResponseTables.
-        val bassBandGains = FxSoundResponseTables.bassBandGainsDb(bass)
-        val preEq = Eq(true, isPowerOn, 10).apply {
-            for (i in 0 until 10) {
-                setBand(i, EqBand(true, EQ_FREQUENCIES[i].toFloat(), bassBandGains[i]))
+        // With an OPRA headphone plan active, the Pre-EQ is re-tasked to the converted
+        // headphone-correction curve and the HyperBass contour is skipped.
+        var preEqBandCount = 10
+        val preEq: Eq = if (headphonePlan != null) {
+            preEqBandCount = headphonePlan.bands.size
+            Eq(true, isPowerOn, headphonePlan.bands.size).apply {
+                for ((i, band) in headphonePlan.bands.withIndex()) {
+                    setBand(i, EqBand(true, band.frequencyHz, band.gainDb))
+                }
+            }
+        } else {
+            val bassBandGains = FxSoundResponseTables.bassBandGainsDb(bass)
+            Eq(true, isPowerOn, 10).apply {
+                for (i in 0 until 10) {
+                    setBand(i, EqBand(true, EQ_FREQUENCIES[i].toFloat(), bassBandGains[i]))
+                }
             }
         }
 
@@ -176,14 +199,16 @@ object DynamicsProcessingTranslator {
 
         // 5. Intelligent Preamp Headroom Allocation
         // Proportional headroom prevents heavy bass transients from repeatedly ducking the limiter
-        val headroomCompensationDb = calculateHeadroomCompensationDb(bass, eqGains, clarity)
-        val finalInputGainDb = (masterGainDb - headroomCompensationDb).coerceIn(-12.0f, 6.0f)
+        val headroomCompensationDb = calculateHeadroomCompensationDb(bass, eqGains, clarity, headphonePlan)
+        val finalInputGainDb = (
+            masterGainDb - headroomCompensationDb + (headphonePlan?.preampDb ?: 0.0f)
+            ).coerceIn(-24.0f, 6.0f)
 
         return Config.Builder(
             DynamicsProcessing.VARIANT_FAVOR_TIME_RESOLUTION,
             channelCount,
             true,  // usePreEq
-            10,    // preEqBandCount
+            preEqBandCount,
             true,  // useMbc
             4,     // mbcBandCount
             true,  // usePostEq
@@ -206,11 +231,14 @@ object DynamicsProcessingTranslator {
      * low-frequency boost in effect. The Equalizer fallback path has no input-gain stage and
      * therefore no headroom control; it bounds bass instead by capping the standalone
      * `BassBoost` strength (see [FALLBACK_BASS_BOOST_MAX_STRENGTH]).
+     * @param headphonePlan when present its positive band gains are added to the peaks the
+     *   preamp must make room for; its negative preamp is folded in by the caller.
      */
     fun calculateHeadroomCompensationDb(
         bassEffectValue: Float,
         eqGains: List<Float>,
-        clarityEffectValue: Float = 5.0f
+        clarityEffectValue: Float = 5.0f,
+        headphonePlan: com.fxsound.audio.opra.HeadphoneEqPlan? = null
     ): Float {
         val bassBandGains = FxSoundResponseTables.bassBandGainsDb(bassEffectValue)
         val clarityBandGains = FxSoundResponseTables.fidelityBandGainsDb(clarityEffectValue)
@@ -229,7 +257,20 @@ object DynamicsProcessingTranslator {
             }
         }
 
-        val bassPeakDb = bassBandGains.max()
+        if (headphonePlan != null) {
+            for (band in headphonePlan.bands) {
+                if (band.gainDb > 0.0f) {
+                    positiveGainSum += band.gainDb
+                }
+                if (band.gainDb > maxPositiveEqBoost) {
+                    maxPositiveEqBoost = band.gainDb
+                }
+            }
+        }
+
+        // While the headphone plan is active, the FxSound bass contour is skipped (the plan
+        // is the single low-frequency stage), so its peak must not be counted twice.
+        val bassPeakDb = bassBandGains.max().takeIf { headphonePlan == null } ?: 0.0f
         val totalPeakPotential = max(maxPositiveEqBoost, bassPeakDb) + (positiveGainSum * 0.08f)
         return (totalPeakPotential * 0.35f).coerceIn(0.0f, 6.0f)
     }

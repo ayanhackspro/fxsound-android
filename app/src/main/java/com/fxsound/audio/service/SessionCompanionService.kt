@@ -89,6 +89,8 @@ class SessionCompanionService : Service() {
          * See DynamicsProcessingTranslator.resolveBassStrategy.
          */
         var usesPreEqHyperBass: Boolean = false,
+        /** Band count currenly configured in the live Pre-EQ; a change forces effect recreation. */
+        var preEqBandCount: Int = 10,
         var lastActiveTimeMs: Long = System.currentTimeMillis()
     )
 
@@ -320,13 +322,16 @@ class SessionCompanionService : Service() {
                 isPowerOn = state.isPowerOn,
                 effects = state.effects,
                 eqGains = state.eqGains,
-                masterGainDb = state.masterGainDb
+                masterGainDb = state.masterGainDb,
+                headphonePlan = state.headphonePlan
             )
             val dp = DynamicsProcessing(0, 0, config).apply {
                 enabled = state.isPowerOn
             }
             session.dynamicsProcessing = dp
-            session.usesPreEqHyperBass = true
+            session.usesPreEqHyperBass = state.headphonePlan == null
+            session.preEqBandCount = state.headphonePlan?.bands?.size ?: 10
+            FxSoundRepository.onHeadphoneAttachResult(true)
             Log.i(TAG, "DynamicsProcessing attached to Session 0 successfully.")
         } catch (e: Exception) {
             Log.w(TAG, "DynamicsProcessing on Session 0 unavailable: ${e.message}. Using standard Equalizer fallback.")
@@ -347,7 +352,8 @@ class SessionCompanionService : Service() {
         // compound the gain and drive the limiter into continuous reduction.
         val bassStrategy = DynamicsProcessingTranslator.resolveBassStrategy(
             hasDynamicsProcessing = session.dynamicsProcessing != null,
-            bassEffectValue = state.effects[FxSoundEffectId.BASS] ?: 4.0f
+            bassEffectValue = state.effects[FxSoundEffectId.BASS] ?: 4.0f,
+            headphonePlanActive = state.headphonePlan != null
         )
         session.usesPreEqHyperBass = bassStrategy.usesPreEqHyperBass
         if (bassStrategy.standaloneBassBoostStrength > 0) {
@@ -430,13 +436,16 @@ class SessionCompanionService : Service() {
                 isPowerOn = state.isPowerOn,
                 effects = state.effects,
                 eqGains = state.eqGains,
-                masterGainDb = state.masterGainDb
+                masterGainDb = state.masterGainDb,
+                headphonePlan = state.headphonePlan
             )
             try {
                 val dp = DynamicsProcessing(0, sessionId, config).apply {
                     enabled = state.isPowerOn
                 }
                 session.dynamicsProcessing = dp
+                session.preEqBandCount = state.headphonePlan?.bands?.size ?: 10
+                if (state.headphonePlan != null) FxSoundRepository.onHeadphoneAttachResult(true)
             } catch (dpEx: Exception) {
                 Log.w(TAG, "DynamicsProcessing failed on session $sessionId, falling back to Equalizer: ${dpEx.message}")
                 try {
@@ -534,12 +543,38 @@ class SessionCompanionService : Service() {
         }
     }
 
+    /** Re-creates the DynamicsProcessing effect on a live session with a fresh config. */
+    private fun attachDynamicsProcessing(
+        session: ActiveSession,
+        config: DynamicsProcessing.Config,
+        state: FxSoundUiState
+    ): Boolean {
+        return try {
+            session.dynamicsProcessing?.release()
+            val dp = DynamicsProcessing(0, session.sessionId, config).apply {
+                enabled = state.isPowerOn
+            }
+            session.dynamicsProcessing = dp
+            session.usesPreEqHyperBass = state.headphonePlan == null
+            session.preEqBandCount = state.headphonePlan?.bands?.size ?: 10
+            Log.i(TAG, "DynamicsProcessing recreated on session ${session.sessionId} (Pre-EQ band count changed).")
+            true
+        } catch (e: Exception) {
+            Log.w(TAG, "DynamicsProcessing recreation failed on session ${session.sessionId}: ${e.message}")
+            // The previous instance was already released; never leave a released effect in use.
+            session.dynamicsProcessing = null
+            FxSoundRepository.onHeadphoneAttachResult(false)
+            false
+        }
+    }
+
     private fun updateAllActiveSessions(state: FxSoundUiState) {
         val config = DynamicsProcessingTranslator.buildDynamicsConfig(
             isPowerOn = state.isPowerOn,
             effects = state.effects,
             eqGains = state.eqGains,
-            masterGainDb = state.masterGainDb
+            masterGainDb = state.masterGainDb,
+            headphonePlan = state.headphonePlan
         )
         val bassEffectValue = state.effects[FxSoundEffectId.BASS] ?: 4.0f
         val virtStrength = DynamicsProcessingTranslator.translateVirtualizer(
@@ -549,6 +584,14 @@ class SessionCompanionService : Service() {
 
         for ((id, session) in activeSessions) {
             // 1. DynamicsProcessing (Pre-EQ, MBC, Post-EQ, Limiter)
+            // If the OPRA plan changed the Pre-EQ band count, the live effect must be
+            // recreated — stage setters reject a band-count mismatch.
+            val planBandCount = state.headphonePlan?.bands?.size ?: 10
+            if (state.headphonePlan != null && session.preEqBandCount != planBandCount) {
+                val attachOk = attachDynamicsProcessing(session, config, state)
+                session.preEqBandCount = if (attachOk) planBandCount else session.preEqBandCount
+                continue
+            }
             try {
                 session.dynamicsProcessing?.apply {
                     try {
@@ -584,7 +627,8 @@ class SessionCompanionService : Service() {
                 session.bassBoost?.apply {
                     val strategy = DynamicsProcessingTranslator.resolveBassStrategy(
                         hasDynamicsProcessing = session.dynamicsProcessing != null,
-                        bassEffectValue = bassEffectValue
+                        bassEffectValue = bassEffectValue,
+                        headphonePlanActive = state.headphonePlan != null
                     )
                     setStrength(strategy.standaloneBassBoostStrength)
                     enabled = state.isPowerOn && !strategy.usesPreEqHyperBass

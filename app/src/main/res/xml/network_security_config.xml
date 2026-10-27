@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Cleartext HTTP is permitted ONLY for the official OPRA dataset mirror
+  (opra.roonlabs.net), whose documented data URL is plain HTTP. Everything else
+  enforces HTTPS. Logging/notification services use external storage, etc.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">opra.roonlabs.net</domain>
+    </domain-config>
+</network-security-config>

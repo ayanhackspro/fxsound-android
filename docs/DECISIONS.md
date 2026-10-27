@@ -366,3 +366,49 @@ which the project's rules forbid; honesty beats feature count.
 **Consequences:** Until a local player or another runtime DSP consumer is added, the
 Spotify/external path (SessionCompanionService over `DynamicsProcessing`) is the whole
 product. Backlog T-003 (Media3 local player) is descoped until the user asks for it.
+
+## ADR-028: OPRA Headphone Profiles Are Fetched at Runtime and Render as the Pre-EQ Stage
+**Date:** 2026-10-27
+**Status:** Accepted
+**Context:** The product is external-session enhancement only (ADR-027). Users need
+per-headphone correction for the models OPRA catalogs. OPRA code is MIT; product and EQ
+data is CC BY-SA 4.0 with mandatory two-level attribution (OPRA logo + link when browsing;
+the preset creator credited more prominently than OPRA per preset). The audit of the
+renderers found no shelving support: the native DfxDsp PEQ shelf sections are permanently
+disabled (`DSP_PEQ_SHELFS_ON … NO LONGER USED`), and Android `DynamicsProcessing.EqBand`
+carries only (cutoff, gain). Dataset facts (mirror `database_v1.jsonl`, today): 714
+vendors, 6230 products, 6229 products with at least one profile, 12,594 profiles; band
+types present are peak_dip, low_shelf, high_shelf and five low_pass bands; preamp
+(`gain_db`) ranges −18.1…+0.8 dB; maximum 20 bands in one curve.
+**Decision:**
+1. Data is fetched at runtime from the official mirror into app-private storage; **no OPRA
+   data is bundled in the APK** while redistribution/ShareAlike review is pending.
+   "Check for updates" revalidates with `If-None-Match` (ETag persisted), so updates are
+   versioned and cheap. The parser indexes the legal JSONL dump only — the website is
+   never scraped.
+2. Filter conversion is explicit: `peak_dip` → peaking band verbatim; `low_shelf` and
+   `high_shelf` → peaking approximation at the same corner frequency, Q = 0.6, gain × 0.8,
+   with the count displayed and a conversion note; pass/band-stop types are skipped and
+   disclosed (never silently substituted). Curves above 20 bands are rejected rather than
+   clamped.
+3. The converted plan occupies the **Pre-EQ stage** of `DynamicsProcessing`. While a plan
+   is active the FxSound HyperBass contour is skipped and the standalone BassBoost stays
+   off (ADR-019 single-bass rule); the user EQ and Clarity remain in Post-EQ, so no
+   duplicate bass/EQ stage exists.
+4. Gain staging: OPRA's own `gain_db` is folded into the input-gain stage alongside the
+   existing headroom calculator, which now counts the plan's positive band gains. The
+   output limiter (ADR-025) is unchanged and still the final clipping guard.
+5. "Applied" is honest: selecting a profile stores a PENDING plan and persists it; only a
+   successful `DynamicsProcessing` attach/rebuild calls
+   `FxSoundRepository.onHeadphoneAttachResult(true)`. Without a supported external
+   session, the UI keeps saying PENDING (and says why).
+6. Attribution: an OPRA card with the official logo, project description and link is
+   shown in the catalogue; per profile the creator's name is the largest line, with the
+   measurement source link and the OPRA CC BY-SA notice beneath.
+7. Local persistence stores the selected profile and the user's global adjustment (a JSON
+   payload on DataStore), restored through the same conversion path at startup.
+**Consequences:** OPRA curves render approximated below/above shelf corners; that error is
+disclosed in the preview and notes. Profiles cannot be applied on the Equalizer fallback
+(no arbitrary frequencies), so those sessions keep the PENDING state. Real-device audio
+validation on the Xiaomi 17 is still pending; counts and conversion were verified against
+the real 12,594-profile dump on the JVM.

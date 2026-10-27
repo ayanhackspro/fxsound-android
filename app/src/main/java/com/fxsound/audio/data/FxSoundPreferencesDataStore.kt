@@ -36,6 +36,7 @@ class FxSoundPreferencesDataStore(private val context: Context) {
         private val KEY_HAPTICS_MODE = stringPreferencesKey("haptics_mode")
         private val KEY_LATENCY_MODE = stringPreferencesKey("latency_mode")
         private val KEY_CUSTOM_PRESETS_JSON = stringPreferencesKey("custom_presets_json")
+        private val KEY_OPRA_SELECTION_JSON = stringPreferencesKey("opra_selection_json")
     }
 
     suspend fun loadState(): FxSoundUiState {
@@ -127,6 +128,26 @@ class FxSoundPreferencesDataStore(private val context: Context) {
         try {
             context.dataStore.edit { prefs ->
                 prefs[KEY_CUSTOM_PRESETS_JSON] = PresetCodec.encode(presets)
+            }
+        } catch (e: Exception) {
+            // Non-fatal persistence failure
+        }
+    }
+
+    /** The persisted OPRA headphone-profile selection (JSON), or null when none. */
+    suspend fun loadOpraSelection(): String? {
+        return try {
+            context.dataStore.data.first()[KEY_OPRA_SELECTION_JSON]
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    suspend fun saveOpraSelection(json: String?) {
+        try {
+            context.dataStore.edit { prefs ->
+                if (json == null) prefs.remove(KEY_OPRA_SELECTION_JSON)
+                else prefs[KEY_OPRA_SELECTION_JSON] = json
             }
         } catch (e: Exception) {
             // Non-fatal persistence failure

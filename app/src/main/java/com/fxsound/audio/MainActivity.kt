@@ -45,6 +45,7 @@ import com.fxsound.audio.service.SessionCompanionService
 import com.fxsound.audio.ui.screens.EqualizerScreen
 import com.fxsound.audio.ui.screens.HomeScreen
 import com.fxsound.audio.ui.screens.PresetsScreen
+import com.fxsound.audio.ui.screens.OpraScreen
 import com.fxsound.audio.ui.screens.SettingsScreen
 import com.fxsound.audio.ui.theme.BorderSubtle
 import com.fxsound.audio.ui.theme.DarkBackground
@@ -200,6 +201,17 @@ fun MainAppContainer(
                         label = { Text("Settings", fontSize = 11.sp, fontWeight = FontWeight.SemiBold) },
                         colors = railColors
                     )
+
+                    NavigationRailItem(
+                        selected = selectedTab == 4,
+                        onClick = {
+                            hapticsManager.performPresetSelected()
+                            selectedTab = 4
+                        },
+                        icon = { Icon(painterResource(R.drawable.ic_presets), contentDescription = "Headphones") },
+                        label = { Text("Phones", fontSize = 11.sp, fontWeight = FontWeight.SemiBold) },
+                        colors = railColors
+                    )
                 }
 
                 Box(
@@ -306,6 +318,17 @@ fun MainAppContainer(
                             label = { Text("Settings", fontSize = 11.sp, fontWeight = FontWeight.SemiBold) },
                             colors = navBarColors
                         )
+
+                        NavigationBarItem(
+                            selected = selectedTab == 4,
+                            onClick = {
+                                hapticsManager.performPresetSelected()
+                                selectedTab = 4
+                            },
+                            icon = { Icon(painterResource(R.drawable.ic_presets), contentDescription = "Headphones") },
+                            label = { Text("Phones", fontSize = 11.sp, fontWeight = FontWeight.SemiBold) },
+                            colors = navBarColors
+                        )
                     }
                 }
             ) { innerPadding ->
@@ -326,6 +349,7 @@ fun MainAppContainer(
                         3 -> SettingsScreen(
                             hapticsManager = hapticsManager
                         )
+                        4 -> OpraScreen(hapticsManager = hapticsManager)
                     }
                 }
             }

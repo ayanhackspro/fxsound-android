@@ -54,6 +54,7 @@ object FxSoundRepository {
         if (preferencesDataStore != null) return
         val dataStore = FxSoundPreferencesDataStore(context.applicationContext)
         preferencesDataStore = dataStore
+        initOpra(context.applicationContext)
         repoScope.launch {
             val savedState = dataStore.loadState()
             _uiState.update { current ->
@@ -71,7 +72,51 @@ object FxSoundRepository {
 
             // Custom presets load in the same bootstrap window as the saved UI state.
             _customPresets.value = dataStore.loadCustomPresets()
+
+            // OPRA selection restore: the persisted profile is re-converted and re-set
+            // through the same path a fresh selection takes.
+            try {
+                opraInstance?.restoreSelection(dataStore.loadOpraSelection())
+            } catch (e: Exception) {
+                // Headphone plan restore must never break app startup (ADR-009).
+            }
         }
+    }
+
+    // OPRA headphone-tuning plan (companion path). The plan lives in uiState so the
+    // existing state-change listener in SessionCompanionService rebuilds the
+    // DynamicsProcessing config without any new plumbing.
+    var opraInstance: com.fxsound.audio.opra.OpraRepository? = null
+        private set
+
+    private fun initOpra(context: Context) {
+        if (opraInstance == null) {
+            opraInstance = com.fxsound.audio.opra.OpraRepository(context)
+        }
+    }
+
+    /** Called by the OPRA screen to attach a plan, persist it, and notify the service. */
+    fun setHeadphonePlan(
+        plan: com.fxsound.audio.opra.HeadphoneEqPlan?,
+        profile: com.fxsound.audio.opra.OpraEqProfile?,
+        adjustDb: Float
+    ) {
+        _uiState.update {
+            it.copy(headphonePlan = plan, isHeadphonePlanApplied = false)
+        }
+        notifyStateChanged()
+        repoScope.launch {
+            preferencesDataStore?.saveOpraSelection(
+                if (profile != null) com.fxsound.audio.opra.OpraJson.encodeForPersistence(profile, adjustDb)
+                else null
+            )
+        }
+    }
+
+    /** The companion service confirms (or rejects) a DynamicsProcessing attach using the plan. */
+    fun onHeadphoneAttachResult(success: Boolean) {
+        _uiState.update { it.copy(isHeadphonePlanApplied = success) }
+        opraInstance?.confirmApplied(success)
     }
 
     /**

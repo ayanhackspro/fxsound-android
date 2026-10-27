@@ -853,3 +853,60 @@ Keep this file updated as work progresses. Do not write planned work as complete
 - **Next recommended step:**
   1. Build preset import/export (backlog T-006) on top of `PresetCodec`.
   2. Then the Media3 local music player (T-003), which remains the largest core gap.
+
+---
+
+### 2026-10-27 - OPRA headphone-tuning library integrated (ADR-028)
+
+- **Goal:** Add OPRA (Open Profiles for Revealing Audio) headphone correction to the
+  external-session companion path, as a searchable, attributed, persisted catalogue.
+
+- **Research (sources read):** OPRA `README.md`, `docs/CONSUMING.md`, `schemas/
+  vendor_info.json`, `schemas/product_info.json`, `schemas/eq_info.json`, `LICENSE.md`.
+  Code is MIT; data is CC BY-SA 4.0. The supported distribution is the generated JSONL
+  dump; the website is not scraped. Mirror `http://opra.roonlabs.net/database_v1.jsonl`
+  is the documented non-commercial fetch endpoint.
+
+- **Dataset audit (downloaded today, 12,636,756 bytes):** 19,538 lines = 714 vendors +
+  6,230 products + 12,594 EQ profiles; 6,229 products have at least one profile; band
+  types present: peak_dip 97,887, low_shelf 12,501, high_shelf 12,479, low_pass 5;
+  preamp -18.1..+0.8 dB; one curve has 20 bands, only three exceed 10.
+
+- **Engine audit:** native DfxDsp shelf cells are permanently disabled; Android
+  `DynamicsProcessing.EqBand` is (cutoff, gain) only. Both renderers are peaking-only, so
+  shelves are approximated with a visible note; pass filters are skipped with a note.
+
+- **What was built:**
+  - `opra/OpraModel.kt`, `opra/OpraJson.kt` (JSONL parser on the app's hand-written JSON
+    parser, because org.json is stubbed in JVM tests), `opra/OpraProfileConverter.kt`,
+    `opra/OpraRepository.kt` (runtime download, ETag versioning, byte-exact line index,
+    lazy band reads, search, selection persistence/apply).
+  - `DynamicsProcessingTranslator`: optional `headphonePlan` re-tasks the Pre-EQ stage,
+    extends headroom calculation, folds OPRA preamp into input gain, keeps the limiter.
+  - `SessionCompanionService`: passes the plan at all three config sites, recreates the
+    effect when the Pre-EQ band count changes, confirms APPLIED only on attach success.
+  - `FxSoundRepository` / `FxSoundPreferencesDataStore`: transient plan in uiState plus
+    `opra_selection_json` persistence (profile + global adjustment).
+  - `ui/screens/OpraScreen.kt` + 5th "Phones" tab: search, product/profile list, analytic
+    filter preview, creator-first attribution, OPRA logo/link, Apply.
+  - Manifest: INTERNET permission and a network-security config allowing cleartext only
+    for `opra.roonlabs.net`.
+
+- **Tests added:** `OpraParsingTest` (real dump lines, vendor/product/eq indexing,
+  malformed-line skipping, persistence round-trip), `OpraProfileConverterTest` (shelf
+  approximation, unsupported filters, over-band rejection, headroom no-double-count),
+  `DynamicsProcessingTranslatorTest` (plan owns the single bass stage, plan counts
+  towards headroom, cuts add none), `OpraDatasetSmokeTest` (full real dump; skips when
+  `OPRA_DATASET_PATH` is unset).
+
+- **Commands run and their actual results:**
+  - `.\\gradlew.bat testDebugUnitTest assembleDebug --no-daemon` with
+    `OPRA_DATASET_PATH` set - **BUILD SUCCESSFUL**; all unit tests pass.
+  - Full-dump report printed by the smoke test: vendors=714 products=6230
+    productsWithProfiles=6229 profiles=12594 converted=12594 rejected=0
+    withNotes=12426 preampRange=[-18.1, 0.8] skippedLines=0; PoC set of 25 models all
+    present and convertible.
+
+- **Not done / pending:** on-device (Xiaomi 17) audio validation and real Spotify-session
+  apply remain pending; dataset redistribution for bundled/offline-first distribution is
+  intentionally not started.
