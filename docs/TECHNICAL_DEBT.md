@@ -12,7 +12,7 @@
 | :--- | :--- | :---: | :--- | :--- |
 | **Performance** | Rapid `uiState` mutations trigger full-screen recomposition at 47 Hz | **HIGH** | Increased CPU usage, battery drain, and thermal throttling on mobile devices | Split `AcousticMetrics` into a separate `StateFlow` consumed exclusively by `AcousticMonitorView` |
 | **Persistence** | State is 100% in-memory; no DataStore integration | **HIGH** | User EQ customizations, slider levels, and power state are lost on process death | Implement `FxSoundPreferencesDataStore` with 200ms write debouncing |
-| **Audio Quality** | Native `processFloat()` quantizes through PCM16 | **RESOLVED** | — | Fixed by ADR-020: the core is configured for 32-bit float once at init and the redundant outer int16 round trip was removed. The SNR benefit is not yet measurable, because the DSP output is clipping (see the next row). |
+| **Audio Quality** | Native `processFloat()` quantizes through PCM16 | **RESOLVED** | — | Fixed by ADR-020 (float core end to end). The SNR gain-staging precondition was then fixed by ADR-025: the native engine no longer clips at the digital rail (worst-case native test: output peak 0.997, zero rail-pinned samples). |
 | **DSP Correctness** | The upstream FxSound DSP ran with uncalibrated default kernel parameters, and the app's five effect values never reached the kernels | **RESOLVED** | — | Fixed by ADR-023: the registry round trip was implemented in memory, and the parameter overlay structs now use 32-bit types with a compile-time layout assertion. The native suite passes 11 of 11. |
 | **DSP Bring-up** | The DSP core was never initialised on Android: the registry stubs failed, so `dfxpInit()` aborted before assigning the handle | **RESOLVED** | — | Fixed by making the registry stubs report "no such value" instead of an error. See `docs/DSP_PORT_AUDIT.md` section 9.1. |
 | **Version Control** | `.gitignore` excluded `/app/` and `/docs/`, so the entire project and the Gradle wrapper were untracked | **HIGH (RESOLVED, NOT COMMITTED)** | The whole codebase was unrecoverable from the repository, and a clone could not build. | The `.gitignore` was corrected. **A commit is still required.** |
@@ -75,8 +75,7 @@
   second quantisation step rather than a platform requirement. The core is now configured for
   32-bit float once at init, and the PCM16 entry point converts at the boundary through the
   same float core.
-- **Residual risk:** The SNR improvement cannot be measured until the DSP's gain staging is
-  correct, because the output currently clips at the digital rail.
+- **Residual risk:** ~~The SNR improvement cannot be measured until the DSP's gain staging is correct, because the output currently clips at the digital rail.~~ Resolved by ADR-025 (2026-10-27): headroom pre-gain plus an output peak catcher removed the rail clipping (worst-case native test: output peak 0.997, zero rail-pinned samples). The SNR benefit itself still awaits a loudness-matched on-device measurement.
 - **Original location:** [`app/src/main/cpp/engine/fxsound_engine.cpp:210-232`](file:///g:/projects/fxsound%20android/app/src/main/cpp/engine/fxsound_engine.cpp#L210-L232)
 - **Problem Analysis:**
   The native engine currently processes float audio via:

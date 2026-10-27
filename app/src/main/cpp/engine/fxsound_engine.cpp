@@ -16,6 +16,18 @@ static inline int16_t floatToPcm16(float v) {
     return static_cast<int16_t>(std::clamp(val, -32768, 32767));
 }
 
+// Headroom compensation: the tolerable overlap between the interpolating EQ bands as a
+// fraction of their summed positive gain. Mirrors the companion engine's formula
+// (docs/GAIN_STAGING_AND_LIMITER.md).
+static constexpr float kEqOverlapAllowance = 0.08f;
+// Beyond this much attenuation the limiter carries the residual instead of burying the
+// signal under pre-gain compensation.
+static constexpr float kMaxHeadroomDb = 30.0f;
+// Limiter ceiling, -0.026 dBFS: a cushion below full scale for the release ramp.
+static constexpr float kLimiterCeil = 0.997f;
+// One-pole release time constant of the limiter, in seconds.
+static constexpr float kLimiterReleaseSeconds = 0.12f;
+
 FxSoundEngine::FxSoundEngine()
     : dspCore_(nullptr),
       sampleRate_(48000),
@@ -28,7 +40,10 @@ FxSoundEngine::FxSoundEngine()
       isClipping_(false),
       targetMasterGainDb_(0.0f),
       smoothedMasterGainDb_(0.0f),
+      userMasterGainDb_(0.0f),
+      limiterGain_(1.0f),
       isCrossfeedEnabled_(false),
+      isHeadroomManagementEnabled_(true),
       crossfeedB0_(0.0f),
       crossfeedA1_(0.0f),
       crossfeedHistoryL_(0.0f),
@@ -96,11 +111,16 @@ bool FxSoundEngine::init(int sampleRate, int numChannels) {
         float interpolatedGain = targetEqBands_[lower_index] + (targetEqBands_[upper_index] - targetEqBands_[lower_index]) * fraction;
         dspCore_->setEqBandBoostCut(i - 1, interpolatedGain);
     }
-    dspCore_->setMasterGain(targetMasterGainDb_.load(std::memory_order_relaxed));
+    // The first synced master gain must include the headroom compensation for the
+    // baseline effect values, so the limiter never starts from a gain the preamp has not
+    // paid for.
+    smoothedMasterGainDb_ = -(isHeadroomManagementEnabled_.load(std::memory_order_relaxed)
+        ? computeHeadroomCompensationDb() : 0.0f);
+    dspCore_->setMasterGain(smoothedMasterGainDb_);
+    targetMasterGainDb_.store(smoothedMasterGainDb_, std::memory_order_relaxed);
 
     isEnabled_.store(true, std::memory_order_release);
-    return true;
-}
+    return true;}
 
 void FxSoundEngine::reset() {
     if (dspCore_) {
@@ -145,11 +165,62 @@ int FxSoundEngine::getNumEqBands() const {
 }
 
 void FxSoundEngine::setMasterGain(float gainDb) {
-    targetMasterGainDb_.store(gainDb, std::memory_order_relaxed);
+    // This is the user's master gain; the headroom compensation is folded in separately
+    // by syncParametersToDsp() so the requested value is preserved.
+    userMasterGainDb_.store(gainDb, std::memory_order_relaxed);
 }
 
 float FxSoundEngine::getMasterGain() const {
-    return targetMasterGainDb_.load(std::memory_order_relaxed);
+    return userMasterGainDb_.load(std::memory_order_relaxed);
+}
+
+// Measured upstream values (docs/FX_RESPONSE_MEASUREMENT.md, docs/TECHNICAL_DEBT.md):
+// the Bass contour peaks at +13.9 dB at setting 10, and the Dynamic Boost's make-up gain
+// rises to +11.8 dB at setting 6 and above. Neither is disclosed by the upstream as a
+// number, so these constants are measurement-derived and must be updated from a new
+// `fxResponseMeasure` run if the upstream port changes.
+float FxSoundEngine::computeHeadroomCompensationDb() const {
+    // Bass contour: approximately linear in the control value, conservative where the
+    // real curve saturates.
+    const float bassPeakDb = 13.9f * smoothedEffectValues_[FXSOUND_EFFECT_BASS] / 10.0f;
+
+    // The 10-band EQ is interpolated across 31 upstream bands, so adjacent bands
+    // overlap. Worst case is the largest single band plus a fraction of the sum of all
+    // the positive bands, mirroring the companion engine's headroom formula. Negative
+    // bands reduce no peak and contribute nothing.
+    float maxPositiveEqDb = 0.0f;
+    float sumPositiveEqDb = 0.0f;
+    for (int i = 0; i < 10; ++i) {
+        const float gain = smoothedEqBands_[i];
+        if (gain > 0.0f) {
+            maxPositiveEqDb = std::max(maxPositiveEqDb, gain);
+            sumPositiveEqDb += gain;
+        }
+    }
+
+    const float dynamicMakeupDb = 11.8f * smoothedEffectValues_[FXSOUND_EFFECT_DYNAMIC_BOOST] / 10.0f;
+    const float masterPositiveDb = std::max(0.0f, userMasterGainDb_.load(std::memory_order_relaxed));
+
+    const float peakPotential = std::max(bassPeakDb, maxPositiveEqDb) +
+        kEqOverlapAllowance * sumPositiveEqDb +
+        dynamicMakeupDb +
+        masterPositiveDb;
+
+    // Bound the attenuation for pathological settings; beyond this the limiter carries
+    // the residual instead of burying the whole signal under compensation.
+    return std::clamp(peakPotential, 0.0f, kMaxHeadroomDb);
+}
+
+void FxSoundEngine::resetEQ() {
+    if (dspCore_) {
+        dspCore_->resetEQ();
+    }
+}
+
+void FxSoundEngine::setEqEnabled(bool enabled) {
+    if (dspCore_) {
+        dspCore_->eqOn(enabled);
+    }
 }
 
 void FxSoundEngine::setCrossfeed(bool enabled) {
@@ -161,6 +232,14 @@ void FxSoundEngine::setCrossfeed(bool enabled) {
 
 bool FxSoundEngine::isCrossfeedEnabled() const {
     return isCrossfeedEnabled_.load(std::memory_order_relaxed);
+}
+
+void FxSoundEngine::setHeadroomManagementEnabled(bool enabled) {
+    isHeadroomManagementEnabled_.store(enabled, std::memory_order_relaxed);
+}
+
+bool FxSoundEngine::isHeadroomManagementEnabled() const {
+    return isHeadroomManagementEnabled_.load(std::memory_order_relaxed);
 }
 
 void FxSoundEngine::syncParametersToDsp() {
@@ -208,7 +287,14 @@ void FxSoundEngine::syncParametersToDsp() {
         }
     }
 
-    const float masterTarget = targetMasterGainDb_.load(std::memory_order_relaxed);
+    // The effective preamp is the user's master gain minus the headroom needed by the
+    // current smoothed boost settings. Because both sides derive from already-smoothed
+    // values, this never jumps: the master ramp below glides it too.
+    const float headroomDb = isHeadroomManagementEnabled_.load(std::memory_order_relaxed)
+        ? computeHeadroomCompensationDb() : 0.0f;
+    const float masterTarget = std::clamp(
+        userMasterGainDb_.load(std::memory_order_relaxed) - headroomDb, -60.0f, 6.0f);
+
     float masterDiff = masterTarget - smoothedMasterGainDb_;
     if (std::fabs(masterDiff) > 0.005f) {
         smoothedMasterGainDb_ += 0.2f * masterDiff;
@@ -216,6 +302,33 @@ void FxSoundEngine::syncParametersToDsp() {
     } else if (smoothedMasterGainDb_ != masterTarget) {
         smoothedMasterGainDb_ = masterTarget;
         dspCore_->setMasterGain(smoothedMasterGainDb_);
+    }
+}
+
+void FxSoundEngine::applyLimiter(float* samples, int numFrames) {
+    if (!samples || numFrames <= 0) return;
+
+    const int totalSamples = numFrames * numChannels_;
+
+    // One-pole release coefficient for the current sample rate. attack is instantaneous:
+    // when a sample needs more gain reduction than the ramp currently holds, the new
+    // value is taken immediately, so the peak either lands at the ceiling or below it.
+    const float releaseCoeff = 1.0f - std::exp(-1.0f / (kLimiterReleaseSeconds * static_cast<float>(sampleRate_)));
+
+    for (int i = 0; i < totalSamples; ++i) {
+        const float s = samples[i];
+        const float absS = std::fabs(s);
+        if (absS > kLimiterCeil) {
+            const float needed = kLimiterCeil / absS;
+            if (needed < limiterGain_) {
+                limiterGain_ = needed;
+            } else {
+                limiterGain_ += releaseCoeff * (1.0f - limiterGain_);
+            }
+        } else {
+            limiterGain_ += releaseCoeff * (1.0f - limiterGain_);
+        }
+        samples[i] = s * limiterGain_;
     }
 }
 
@@ -410,6 +523,10 @@ void FxSoundEngine::applyPostProcessing(float* samples, int numFrames) {
             samples[idxR] = std::clamp(r + crossGain * crossfeedHistoryL_, -1.0f, 1.0f);
         }
     }
+
+    // Last stage: the output peak catcher. Everything above may overshoot (the upstream
+    // stage gains add up); this holds the final sample stream at the ceiling.
+    applyLimiter(samples, numFrames);
 }
 
 void FxSoundEngine::getMetrics(FxSoundMetrics* metrics) {

@@ -40,6 +40,13 @@ object FxSoundRepository {
     private val repoScope = CoroutineScope(Dispatchers.IO)
     private var saveDebounceJob: Job? = null
 
+    // User custom presets (create/rename/delete), persisted via DataStore. The combined
+    // list consumed by the UI is built-in presets first, then the user's own.
+    private val _customPresets = MutableStateFlow<List<FxSoundPreset>>(emptyList())
+    val customPresets: StateFlow<List<FxSoundPreset>> = _customPresets.asStateFlow()
+    val allPresets: List<FxSoundPreset>
+        get() = FxSoundPreset.ALL_PRESETS + _customPresets.value
+
     // Listener callback for live audio effect synchronization
     var onStateChangedListener: ((FxSoundUiState) -> Unit)? = null
 
@@ -57,12 +64,74 @@ object FxSoundRepository {
                     eqGains = savedState.eqGains,
                     masterGainDb = savedState.masterGainDb,
                     hapticsMode = savedState.hapticsMode,
-                    isCrossfeedEnabled = savedState.isCrossfeedEnabled,
                     latencyMode = savedState.latencyMode
                 )
             }
             notifyStateChanged()
+
+            // Custom presets load in the same bootstrap window as the saved UI state.
+            _customPresets.value = dataStore.loadCustomPresets()
         }
+    }
+
+    /**
+     * Creates a named custom preset from the current tuning (the five effect values and
+     * the 10-band EQ). Uniqueness of the id comes from the timestamp; names are free text
+     * and are only expected to be readable.
+     */
+    fun saveCurrentAsPreset(name: String, description: String = "") {
+        val trimmedName = name.trim()
+        if (trimmedName.isEmpty()) return
+
+        val current = _uiState.value
+        val preset = FxSoundPreset(
+            id = "user_" + System.currentTimeMillis(),
+            name = trimmedName,
+            description = description.trim(),
+            clarity = current.effects[FxSoundEffectId.FIDELITY] ?: 5.0f,
+            ambience = current.effects[FxSoundEffectId.AMBIENCE] ?: 2.0f,
+            surround = current.effects[FxSoundEffectId.SURROUND] ?: 3.0f,
+            dynamicBoost = current.effects[FxSoundEffectId.DYNAMIC_BOOST] ?: 4.0f,
+            bass = current.effects[FxSoundEffectId.BASS] ?: 4.0f,
+            eqGains = current.eqGains
+        )
+        _customPresets.value = _customPresets.value + preset
+        persistCustomPresets()
+    }
+
+    fun renamePreset(presetId: String, newName: String) {
+        val trimmed = newName.trim()
+        if (trimmed.isEmpty()) return
+        _customPresets.update { list ->
+            list.map { if (it.id == presetId) it.copy(name = trimmed) else it }
+        }
+        persistCustomPresets()
+    }
+
+    fun deletePreset(presetId: String) {
+        val before = _customPresets.value
+        val after = before.filter { it.id != presetId }
+        if (after.size == before.size) return
+        _customPresets.value = after
+        persistCustomPresets()
+
+        // If the deleted preset was active, the tuning on the sliders is kept (it is not
+        // lost) but the selection must stop claiming a preset that no longer exists.
+        _uiState.update { current ->
+            if (current.currentPresetId == presetId) {
+                current.copy(currentPresetId = "custom")
+            } else {
+                current
+            }
+        }
+        notifyStateChanged()
+        scheduleSave()
+    }
+
+    private fun persistCustomPresets() {
+        val dataStore = preferencesDataStore ?: return
+        val snapshot = _customPresets.value
+        repoScope.launch { dataStore.saveCustomPresets(snapshot) }
     }
 
     fun setPower(enabled: Boolean) {
@@ -185,12 +254,6 @@ object FxSoundRepository {
 
     fun setHapticsMode(mode: HapticsMode) {
         _uiState.update { it.copy(hapticsMode = mode) }
-        scheduleSave()
-    }
-
-    fun setCrossfeed(enabled: Boolean) {
-        _uiState.update { it.copy(isCrossfeedEnabled = enabled) }
-        notifyStateChanged()
         scheduleSave()
     }
 

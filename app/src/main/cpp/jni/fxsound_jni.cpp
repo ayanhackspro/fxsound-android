@@ -87,6 +87,13 @@ Java_com_fxsound_audio_nativebridge_FxSoundNativeBridge_nativeGetMasterGain(
     return engine->getMasterGain();
 }
 
+JNIEXPORT void JNICALL
+Java_com_fxsound_audio_nativebridge_FxSoundNativeBridge_nativeResetEQ(
+    JNIEnv* env, jobject thiz, jlong handle) {
+    auto* engine = getEngine(handle);
+    if (engine) engine->resetEQ();
+}
+
 JNIEXPORT jint JNICALL
 Java_com_fxsound_audio_nativebridge_FxSoundNativeBridge_nativeProcessPcm16(
     JNIEnv* env, jobject thiz, jlong handle, jshortArray inBuffer, jshortArray outBuffer, jint numFrames) {

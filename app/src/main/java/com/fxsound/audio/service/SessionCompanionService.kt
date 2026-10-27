@@ -485,8 +485,9 @@ class SessionCompanionService : Service() {
 
             // 4. PresetReverb is intentionally not attached. It is an auxiliary effect: the
             // source track must create the aux send, which an app cannot do on another app's
-            // track, so it is a no-op for external sessions. The Ambience effect is applied by
-            // the native C++ DfxDsp core in the in-app reference player instead.
+            // track, so it is a no-op for external sessions. There is no in-app player
+            // anymore (ADR-027), so the Ambience control has no reachable path at all and is
+            // not shown in the UI.
 
             activeSessions[sessionId] = session
 

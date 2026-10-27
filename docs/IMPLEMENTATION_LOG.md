@@ -661,3 +661,195 @@ Keep this file updated as work progresses. Do not write planned work as complete
      rendering of the same source, at matched loudness.
   2. Investigate the reference curve's notches, which the preset work would also address.
   3. Decide the Ambience and Surround mappings explicitly, now that the rest is measured.
+
+---
+
+### 2026-10-27 — Reference-curve notch investigation, step 1: the graphic EQ is exonerated
+
+- **Goal:** Test the recorded hypothesis that the reference curve's deep notches
+  (−20 to −40 dB at 1250, 4000, 10000, 12500 and 20000 Hz) come from the upstream 31-band
+  graphic EQ's state before any preset is loaded.
+
+- **Summary:** The hypothesis is **false**. Two new diagnostic curves — a flattened EQ
+  (`resetEQ()`, all 31 bands written to 0 dB in every upstream state storage) and a fully
+  bypassed EQ stage (`eqOn(false)`) — are byte-identical to the unmodified reference. A
+  raw-passthrough control (DSP power off) reads 0.000 dB at every probe frequency, which
+  proves the tone generator and the Goertzel extractor are sound. The notches therefore
+  must be produced inside the upstream kernel by stages that stay in the signal chain even
+  at zero settings. The EQ route, and the resetEQ wiring built to test it, is kept as a
+  correct API addition, but the notch debt item remains open with a narrowed suspect list:
+  the reverb's residual path, the widener, the dynamics stage or the exciter's residual
+  path at zero depth.
+
+- **Files changed:**
+  - `app/src/main/cpp/fxsound_dsp/DfxDsp.cpp` and `include/DfxDsp.h` — `DfxDsp::resetEQ()`
+    exposed on the public core API (delegating to the existing upstream
+    `DfxDspPrivate::resetEQ()`), plus the pre-existing uncommitted edit of this pair.
+  - `app/src/main/cpp/engine/fxsound_engine.cpp/.h` — `FxSoundEngine::resetEQ()` and
+    `FxSoundEngine::setEqEnabled(bool)` wrappers.
+  - `app/src/main/cpp/jni/fxsound_jni.cpp` and
+    `app/src/main/java/com/fxsound/audio/nativebridge/FxSoundNativeBridge.kt` —
+    `nativeResetEQ` and the Kotlin-side `resetEQ()`.
+  - `app/src/main/cpp/tests/measure_fx_response.cpp` — three new diagnostic reference
+    curves: `REFERENCE_FLATEQ`, `REFERENCE_NOEQ` and `REFERENCE_RAW`.
+  - `docs/FX_RESPONSE_MEASUREMENT.md` — the notch paragraph updated with the findings.
+
+- **Commands run and their actual results:**
+  - `.\gradlew.bat fxResponseMeasure --no-daemon` (after booting the API 37 emulator,
+    since the task requires an Android device or emulator and no physical device was
+    connected) — **BUILD SUCCESSFUL** three times; each run rewrites
+    `docs/fx_response/fx_response_measurements.csv`.
+  - `REFERENCE_FLATEQ` vs `REFERENCE`: identical at all 32 probes (the notches remain).
+  - `REFERENCE_NOEQ` vs `REFERENCE`: identical at all 32 probes (the notches remain).
+  - `REFERENCE_RAW`: **0.000 dB ± 0.056 at every probe**, no notches.
+  - `.\gradlew.bat testDebugUnitTest nativeTest assembleDebug --no-daemon` —
+    **BUILD SUCCESSFUL**; all JVM unit tests pass and all 12 native DSP tests pass
+    (printed `>>> ALL NUMERICAL DSP TESTS PASSED <<<`).
+
+- **Blockers:**
+  - The exact kernel stage producing the notches is still unknown. Narrowing it further
+    needs stage-level bisection inside the upstream DSP (temporarily bypassing individual
+    stages in `Play32.c`/`Comsftwr.c` in a test build, which per the investigation rules
+    must not be left in the shipping code).
+  - findings are from the API 37 emulator, not the Xiaomi 17.
+
+- **Next recommended step:**
+  1. Bisect the kernel stages with a diagnostic build: bypass reverb, widener, dynamics
+     and exciter one at a time at the `comProcessWaveBuffer`/`DSPS_PLAY_PROCESS` level and
+     re-measure the reference.
+  2. Alternatively, load a known-good default preset before measurement to see whether a
+     properly initialised preset state produces a flat reference.
+
+---
+
+### 2026-10-27 — Native engine gain staging: headroom pre-gain plus an output peak catcher (ADR-025)
+
+- **Goal:** Fix the recorded hard clipping at the digital rail when near-full-scale
+  material meets maximised boost settings.
+
+- **Summary:** A new worst-case native test (0.95 full-scale 60 Hz sine, all five effects
+  at 10, all EQ bands at +14 dB, master gain 0) demonstrated the clipping concretely
+  before the fix: **3734 rail-pinned samples, with runs up to 620 samples**. The fix is
+  two-stage and is ADR-025:
+  1. the upstream master gain now carries a headroom compensation computed from the
+     measured worst-case boosts (Bass +13.9 dB, Dynamic Boost make-up +11.8 dB, largest
+     EQ band + 8% of the summed positive EQ bands, positive user master), smoothed
+     (never jumps) and capped at 30 dB;
+  2. an output peak catcher (instantaneous attack, one-pole 120 ms release,
+     -0.026 dBFS ceiling, no lookahead) runs last in `applyPostProcessing`.
+  The response measurement harness runs with the compensation switched off
+  (`setHeadroomManagementEnabled(false)`), preserving the kernel-isolated semantics of the
+  mapping data; the limiter stays active there.
+
+- **Files changed:**
+  - `app/src/main/cpp/engine/fxsound_engine.cpp/.h` — `userMasterGainDb_` (requested gain
+    preserved), `computeHeadroomCompensationDb()`, `applyLimiter()` with
+    audio-thread-only claimed-free state, `setHeadroomManagementEnabled()`, and the
+    limiter wired as the last stage of `applyPostProcessing`.
+  - `app/src/main/cpp/tests/test_dsp_numerical.cpp` — `testWorstCaseGainStaging()`
+    (counts rail-pinned samples and longest rail run).
+  - `app/src/main/cpp/tests/measure_fx_response.cpp` — the harness disables the
+    compensation on init.
+  - `docs/DECISIONS.md` (ADR-025), `docs/GAIN_STAGING_AND_LIMITER.md` (native engine
+    section), `docs/TECHNICAL_DEBT.md` (gain-staging rows marked resolved).
+
+- **Commands run and their actual results:**
+  - `.\gradlew.bat nativeTest --no-daemon` (emulator-5554) — before the fix the new test
+    reported `Output peak: 1 | Rail-clipped samples: 3734 | Longest rail run: 620` and
+    **FAILED**; after the fix `Output peak: 0.996614 | Rail-clipped samples: 0` and
+    **all 14 native DSP tests pass**.
+  - `.\gradlew.bat testDebugUnitTest --no-daemon` — **BUILD SUCCESSFUL** (all JVM tests
+    pass, including `FxSoundResponseTablesTest` replaying the committed CSV).
+  - `.\gradlew.bat fxResponseMeasure --no-daemon` — **BUILD SUCCESSFUL**;
+    `BASS,10.0,100.0` measures **+13.830 dB**, matching the committed dataset
+    (+13.9 dB), which confirms measurement-mode preserves the mapping semantics.
+
+- **Blockers:**
+  - The limiter's improvement is the rail-clipping behaviour verified on the emulator; a
+    loudness-matched subjective A/B (with vs without pumping on a boosted preset) and the
+    SNR measurement still need the Xiaomi 17.
+  - The headroom compensation constants derive from the committed measurements; they must
+    be refreshed from a new `fxResponseMeasure` run if the upstream port changes.
+
+- **Next recommended step:**
+### 2026-10-27 — In-app reference player removed (user direction, ADR-027)
+
+- **Goal:** The user does not want an in-app local audio player; the product should only
+  connect to external players (Spotify, Musicolet, etc.) through the companion engine.
+
+- **Summary:** `HiFiPlayerEngine.kt` deleted along with all wiring: construction and
+  release in `MainActivity`, the parameter every screen passing, the Settings
+  "Native C++ DSP Test Harness" card and its multitone button, and the crossfeed setting
+  (which only the reference player could ever apply — leaving it would have been a fake
+  active state). The Ambience slider is also removed from the Home screen because, as the
+  code honestly documented, it could never reach external audio and had no runtime
+  consumer anymore. `RouteStatus.PLAYING_HIFI` remains in the enum with its UI branches
+  dead-but-harmless, service "no external session" checks untouched. The native DSP
+  library, its whole port, the JNI bridge and the crossfeed kernel stay; they are
+  exercised by the native test suite and the measurement harness.
+
+- **Files changed:**
+  - deleted: `app/src/main/java/com/fxsound/audio/engine/HiFiPlayerEngine.kt`
+  - `MainActivity.kt`, `ui/screens/HomeScreen.kt`, `ui/screens/SettingsScreen.kt`,
+    `model/FxSoundModel.kt` (crossfeed field), `data/FxSoundRepository.kt` (crossfeed
+    setter/copy), `data/FxSoundPreferencesDataStore.kt` (crossfeed key).
+  - `docs/DECISIONS.md` (ADR-027), `docs/FEATURE_BACKLOG.md` (T-003 descoped row).
+
+- **Commands run and their actual results:**
+  - `.\gradlew.bat testDebugUnitTest --rerun-tasks --no-daemon` — **BUILD SUCCESSFUL**;
+    all JVM tests pass after re-run.
+  - `.\gradlew.bat assembleDebug --no-daemon` — **BUILD SUCCESSFUL** (arm64-v8a and
+    x86_64 native builds).
+
+- **Next recommended step:**
+  1. Verify the Spotify path and the notification toggle on the Xiaomi 17 (still pending
+     for every external-session claim).
+  2. Commit the accumulated uncommitted work (gain staging, presets, player removal).
+
+---
+
+### 2026-10-27 — Custom user presets: create, rename and delete (backlog T-005)
+
+- **Goal:** Let users save the current tuning (five effect values plus the 10-band EQ)
+  as a named preset that survives restarts, and rename or delete their own presets.
+
+- **Summary:** Implemented end to end. `FxSoundRepository` now owns a `customPresets`
+  StateFlow with `saveCurrentAsPreset()`, `renamePreset()` and `deletePreset()`; the
+  presets are stored as a single JSON payload in DataStore through the new hand-written
+  `PresetCodec` (ADR-026). `PresetsScreen` gained a "MY PRESETS" section with rename and
+  delete actions, a "SAVE CURRENT TUNING AS PRESET" card, and text-entry/confirm dialogs;
+  the existing factory-preset cards and visual language are unchanged. Deleting the
+  active preset keeps the sliders and resets the selection marker. One JVM corner case:
+  Android's org.json is stubbed in unit tests, so no external JSON library was added and
+  the codec parses its own fixed schema.
+
+- **Files changed:**
+  - `app/src/main/java/com/fxsound/audio/data/PresetCodec.kt` (new) — codec plus
+    `MinimalJsonParser`.
+  - `app/src/main/java/com/fxsound/audio/data/FxSoundPreferencesDataStore.kt` —
+    `loadCustomPresets()` / `saveCustomPresets()` under `custom_presets_json`.
+  - `app/src/main/java/com/fxsound/audio/data/FxSoundRepository.kt` — `customPresets`
+    StateFlow, CRUD functions, load at persistence bootstrap, full-list atomic rewrite.
+  - `app/src/main/java/com/fxsound/audio/ui/screens/PresetsScreen.kt` — custom preset
+    section, save/rename/delete dialogs.
+  - `app/src/test/java/com/fxsound/audio/data/PresetCodecTest.kt` (new) — 7 tests:
+    round trip, ordering, null/garbage handling, malformed-entry skip, wrong band count,
+    out-of-range clamping.
+  - `docs/DECISIONS.md` (ADR-026).
+
+- **Commands run and their actual results:**
+  - `.\gradlew.bat testDebugUnitTest assembleDebug --no-daemon` — first run **FAILED**
+    (4 of 39 tests: org.json stubs throwing `RuntimeException`, plus two Kotlin type
+    inference errors in the draft codec); after the rewrite and parser fixes,
+    **BUILD SUCCESSFUL**, 39 tests, 0 failures (32 previous + 7 new).
+
+- **Blockers:**
+  - The dialogs and the "MY PRESETS" flow have not been exercised on a device; Compose UI
+    behaviour (keyboard, scroll under the dialogs) still needs a device check.
+  - A custom preset applied as the active one is restored by id at startup; if the stored
+    state ever refers to a deleted preset id, the UI keeps the sliders and shows no
+    selected card (acceptable, documented here).
+
+- **Next recommended step:**
+  1. Build preset import/export (backlog T-006) on top of `PresetCodec`.
+  2. Then the Media3 local music player (T-003), which remains the largest core gap.

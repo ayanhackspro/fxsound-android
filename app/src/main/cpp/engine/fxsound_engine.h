@@ -58,8 +58,26 @@ public:
     void setMasterGain(float gainDb);
     float getMasterGain() const;
 
+    /**
+     * Flattens all 31 upstream graphic EQ bands to 0 dB in every state storage
+     * (memory and registry), including any filter state a preset would have left
+     * behind. Used to establish a known-flat baseline before measurement.
+     */
+    void resetEQ();
+
+    /** Bypasses or re-enables the upstream 31-band graphic EQ stage entirely. */
+    void setEqEnabled(bool enabled);
     void setCrossfeed(bool enabled);
     bool isCrossfeedEnabled() const;
+
+    /**
+     * Measurement mode: disables the static preamp headroom compensation so that
+     * effect-minus-reference curves isolate the upstream kernels alone. The limiter
+     * stays active. User playback must keep compensation on; only the response
+     * measurement harness turns this off.
+     */
+    void setHeadroomManagementEnabled(bool enabled);
+    bool isHeadroomManagementEnabled() const;
 
     // Real-time audio processing functions (must be lock-free and allocation-free)
     int processFloat(const float* inSamples, float* outSamples, int numFrames);
@@ -94,6 +112,11 @@ private:
     std::atomic<float> currentOutRms_;
     std::atomic<bool>  isClipping_;
 
+    // Static preamp headroom management is applied during user playback. It must be
+    // off while the response mapping data is measured, or the compensation would cancel
+    // the very kernel boosts the measurement is meant to isolate.
+    std::atomic<bool> isHeadroomManagementEnabled_;
+
     // Target parameters are published from the UI/JNI thread and consumed by the audio
     // thread, so they are atomic. The smoothed copies are written and read by the audio
     // thread only, so they stay plain floats.
@@ -101,8 +124,17 @@ private:
     float smoothedEffectValues_[FXSOUND_NUM_EFFECTS];
     std::atomic<float> targetEqBands_[10];
     float smoothedEqBands_[10];
+
+    // The user's requested master gain. The gain actually sent to the core is this minus
+    // the headroom compensation computed from the smoothed boost settings, so boosted
+    // presets are attenuated before they clip.
+    std::atomic<float> userMasterGainDb_;
     std::atomic<float> targetMasterGainDb_;
     float smoothedMasterGainDb_;
+
+    // Output peak catcher. Owned by the audio thread: no atomic, no lock. The gain is
+    // applied instantly on an over and releases through a one-pole ramp afterwards.
+    float limiterGain_;
 
     // BS2B Binaural Headphone Crossfeed state
     std::atomic<bool> isCrossfeedEnabled_;
@@ -115,6 +147,16 @@ private:
     bool crossfeedWasEnabled_;
 
     void syncParametersToDsp();
+
+    // Estimated worst-case positive gain the boosted stages can add, derived from the
+    // upstream DSP's measured response (docs/FX_RESPONSE_MEASUREMENT.md). Used to
+    // attenuate the pre-gain before the boosts run, so the limiter only ever guards a
+    // small residual.
+    float computeHeadroomCompensationDb() const;
+
+    // Output limiter. One-pole 120 ms release, instantaneous attack, ceiling at
+    // kLimiterCeil. Runs last, after every other gain stage. Audio-thread only.
+    void applyLimiter(float* samples, int numFrames);
 
     // Runs the buffer through the upstream float core. The upstream copies the input to
     // the output and then processes the output in place, so no scratch buffer is needed.

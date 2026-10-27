@@ -39,7 +39,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.fxsound.audio.engine.HiFiPlayerEngine
+import com.fxsound.audio.data.FxSoundRepository
 import com.fxsound.audio.haptics.HapticsManager
 import com.fxsound.audio.service.SessionCompanionService
 import com.fxsound.audio.ui.screens.EqualizerScreen
@@ -59,7 +59,6 @@ import com.fxsound.audio.ui.theme.TextSecondary
 class MainActivity : ComponentActivity() {
 
     private lateinit var hapticsManager: HapticsManager
-    private val hiFiPlayer by lazy { HiFiPlayerEngine(this) }
 
     private val notificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -91,8 +90,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             FxSoundTheme {
                 MainAppContainer(
-                    hapticsManager = hapticsManager,
-                    hiFiPlayer = hiFiPlayer
+                    hapticsManager = hapticsManager
                 )
             }
         }
@@ -122,15 +120,13 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
-        hiFiPlayer.release()
         super.onDestroy()
     }
 }
 
 @Composable
 fun MainAppContainer(
-    hapticsManager: HapticsManager,
-    hiFiPlayer: HiFiPlayerEngine
+    hapticsManager: HapticsManager
 ) {
     var selectedTab by remember { mutableIntStateOf(0) }
 
@@ -222,7 +218,6 @@ fun MainAppContainer(
                                 ) {
                                     HomeScreen(
                                         hapticsManager = hapticsManager,
-                                        hiFiPlayer = hiFiPlayer,
                                         onNavigateToEqualizer = { selectedTab = 1 },
                                         onNavigateToPresets = { selectedTab = 2 }
                                     )
@@ -247,8 +242,7 @@ fun MainAppContainer(
                         1 -> EqualizerScreen(hapticsManager = hapticsManager)
                         2 -> PresetsScreen(hapticsManager = hapticsManager)
                         3 -> SettingsScreen(
-                            hapticsManager = hapticsManager,
-                            hiFiPlayer = hiFiPlayer
+                            hapticsManager = hapticsManager
                         )
                     }
                 }
@@ -324,15 +318,13 @@ fun MainAppContainer(
                     when (selectedTab) {
                         0 -> HomeScreen(
                             hapticsManager = hapticsManager,
-                            hiFiPlayer = hiFiPlayer,
                             onNavigateToEqualizer = { selectedTab = 1 },
                             onNavigateToPresets = { selectedTab = 2 }
                         )
                         1 -> EqualizerScreen(hapticsManager = hapticsManager)
                         2 -> PresetsScreen(hapticsManager = hapticsManager)
                         3 -> SettingsScreen(
-                            hapticsManager = hapticsManager,
-                            hiFiPlayer = hiFiPlayer
+                            hapticsManager = hapticsManager
                         )
                     }
                 }

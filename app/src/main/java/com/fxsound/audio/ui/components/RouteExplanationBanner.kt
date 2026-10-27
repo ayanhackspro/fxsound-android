@@ -55,13 +55,11 @@ fun RouteExplanationBanner(
             "Audio is playing, but only the system mix is attached and this source may be " +
                 "bypassing FxSound. Music players that publish an audio session (Spotify, " +
                 "Poweramp) are enhanced. YouTube, browsers, games and DRM video cannot be " +
-                "intercepted on Android. Use the reference player for those — it runs the " +
-                "authentic FxSound C++ engine."
+                "intercepted on Android, by any app, without root."
         else ->
             "FxSound enhances music players that publish an audio session, such as Spotify and " +
                 "Poweramp. Browsers, video apps, games and DRM content cannot be intercepted on " +
-                "Android, by any app, without root. The reference player runs the authentic " +
-                "FxSound C++ engine on the audio it plays itself."
+                "Android, by any app, without root."
     }
 
     Box(

@@ -1,4 +1,4 @@
-# Architecture Decision Records
+﻿# Architecture Decision Records
 
 ## ADR-001: Native Android app
 **Status:** Accepted  
@@ -286,3 +286,83 @@ in ways that matter: the bass boost had about half the gain of the real thing an
 centre, the clarity control had no mid scoop at all, and the dynamic boost's threshold was
 4 to 10 dB too high. Since the companion engine is the only route by which FxSound can reach
 another app's audio on Android, its fidelity is the product.
+
+## ADR-025: Native Engine Headroom Pre-Gain Plus a Non-Lookahead Output Limiter
+**Date:** 2026-10-27
+**Status:** Accepted
+**Context:** The native C++ engine hard-clipped at the digital rail when near-full-scale
+material met maximised boost settings (a new worst-case native test measured 3734
+rail-pinned samples with runs up to 620 samples). `docs/DSP_QUALITY_SPEC.md` requires
+pre-gain or automatic headroom reduction when a preset boosts, and documents any limiter.
+**Decision:**
+1. **Static headroom pre-gain.** The boost stages' measured worst-case positive gain
+   (Bass contour peaking at +13.9 dB, Dynamic Boost make-up up to +11.8 dB, the largest EQ
+   band plus 8% of the summed positive EQ bands, and any positive user master gain) is
+   attenuated from the preamp by folding it into the master gain at parameter-sync time.
+   It is computed from the smoothed values, so it never jumps, and is capped at 30 dB.
+2. **Output peak catcher as the residual guard.** A non-lookahead limiter with an
+   instantaneous attack (the required gain is applied the moment a sample needs it) and a
+   one-pole 120 ms release, ceiling -0.026 dBFS. It runs last, after every other gain
+   stage, and is audio-thread-only state with no allocation.
+3. **Measurement mode.** `setHeadroomManagementEnabled(false)` disables the static
+   pre-gain so `fxResponseMeasure` continues to isolate the upstream kernels:
+   effect-minus-reference curves were re-measured after the change and match the
+   committed dataset (Bass at setting 10: +13.83 dB at 100 Hz vs +13.9 recorded).
+   The limiter stays active in measurement mode.
+**Reason:** Gain staging is the spec's primary requirement and the limiter only guards the
+residual, which keeps pumping small for steady material; a limiter alone would crush
+max boosts into sustained gain reduction. A non-lookahead limiter cannot anticipate a
+peak; it needs a lookahead delay line to do that, which this design does not add.
+That limitation is documented in `docs/GAIN_STAGING_AND_LIMITER.md`.
+**Consequences:** Output is bounded by construction rather than by clamping; the
+worst-case native test (near-full-scale sine, all effects at 10, all EQ bands at +14 dB)
+now reports an output peak of 0.997 with zero rail-pinned samples.
+
+## ADR-026: Custom User Presets via a Hand-Written JSON Codec on DataStore
+**Date:** 2026-10-27
+**Status:** Accepted
+**Context:** The backlog's custom-preset feature (create/rename/delete, P2) needs named
+storage of the five effect values and the 10-band EQ. The JVM unit-test environment does
+not implement Android's org.json (stubs throw), and adding an external JSON library is
+restrained by the dependency rules in AGENTS.md.
+**Decision:** Custom presets are stored as one JSON payload under a single DataStore
+preferences key (`custom_presets_json`), encoded/decoded by `PresetCodec`, a
+hand-written codec for the fixed preset schema. decode() skips malformed entries rather
+than failing, clamps effect values to 0..10 and EQ gains to -14..+14, and rejects a wrong
+EQ band count. ids are `user_<timestamp>`; the schema is versioned implicitly — unknown
+object fields are skipped by the parser, so a future version round-trips.
+**Reason:** Adds zero dependencies, is fully JVM-testable (7 codec tests in
+`PresetCodecTest`), and the fixed tiny schema is genuinely worth less than a general JSON
+library.
+**Consequences:** Preset CRUD lives in `FxSoundRepository` (`customPresets` StateFlow,
+`saveCurrentAsPreset`, `renamePreset`, `deletePreset`); deleting the active preset keeps
+the sliders but resets the selection marker to "custom". Backlog T-006 (preset
+import/export files) can build directly on this codec.
+
+## ADR-027: The In-App Reference Player Is Removed; the Product Is External-Session Enhancement Only
+**Date:** 2026-10-27
+**Status:** Accepted (explicit user direction)
+**Context:** The in-app reference player (`HiFiPlayerEngine`, a test-signal generator
+through the native C++ DfxDsp core) was the only runtime caller of the ported DSP. The
+user has decided the product is connecting to Spotify and other players, and the in-app
+local player is not wanted.
+**Decision:**
+1. `HiFiPlayerEngine.kt` is deleted, together with its wiring in `MainActivity`
+   (construction, release, parameters), `HomeScreen` and `SettingsScreen`.
+2. The Settings test-harness card ("Play Reference Multitone") and the session playback
+   button are removed with it.
+3. The Binaural Crossfeed setting and its diagnostics row are removed: crossfeed lives in
+   the native engine's post-processing, which only the reference player drove, so any
+   remaining toggle would be a fake active state (violating the honest route-state rules).
+   The native crossfeed code itself stays in `libfxsound_dsp` and its JNI bridge.
+4. The Ambience slider is removed from the Home screen: Android's PresetReverb is an
+   auxiliary effect the source app must create, so it cannot enhance another app's track,
+   and with the reference player gone there is no path that applies it. The Ambience value
+   remains in the data model, presets and persistence so nothing is lost in storage.
+5. The native DSP library remains in the build; it is exercised by the native test suite
+   and the response measurement harness. No runtime caller remains in the app.
+**Reason:** A permanently disabled slider or toggle misrepresents the engagement state,
+which the project's rules forbid; honesty beats feature count.
+**Consequences:** Until a local player or another runtime DSP consumer is added, the
+Spotify/external path (SessionCompanionService over `DynamicsProcessing`) is the whole
+product. Backlog T-003 (Media3 local player) is descoped until the user asks for it.

@@ -55,6 +55,7 @@ public:
 	void setVolumeLeveling(float gain_db);
 	float getMasterGain();
 	void setMasterGain(float gain_db);
+	int resetEQ();  // Flattens all 31 graphic EQ bands to 0 dB
 	float getFilterQ();
 	void setFilterQ(float q_multiplier);
 	void setNumBands(int num_bands);

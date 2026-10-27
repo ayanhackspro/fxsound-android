@@ -1,4 +1,4 @@
-package com.fxsound.audio.ui.screens
+﻿package com.fxsound.audio.ui.screens
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -46,7 +46,6 @@ import androidx.compose.ui.unit.sp
 import com.fxsound.audio.R
 import com.fxsound.audio.data.FxSoundRepository
 import com.fxsound.audio.engine.DynamicsProcessingTranslator
-import com.fxsound.audio.engine.HiFiPlayerEngine
 import com.fxsound.audio.haptics.HapticsManager
 import com.fxsound.audio.model.HapticsMode
 import com.fxsound.audio.model.LatencyMode
@@ -65,16 +64,10 @@ import com.fxsound.audio.ui.theme.TextTertiary
 @Composable
 fun SettingsScreen(
     hapticsManager: HapticsManager,
-    hiFiPlayer: HiFiPlayerEngine,
     modifier: Modifier = Modifier
 ) {
     val state by FxSoundRepository.uiState.collectAsState()
     val scrollState = rememberScrollState()
-    val isHiFiPlaying = state.routeStatus == RouteStatus.PLAYING_HIFI
-    // Crossfeed is implemented in the native C++ engine, which only runs for the app-owned
-    // reference player. Android's audio framework has no crossfeed effect, so it cannot be
-    // applied to another app's audio session.
-    val crossfeedAvailable = FxSoundNativeBridge.isNativeAvailable()
     val context = LocalContext.current
     val clipboardManager = LocalClipboardManager.current
 
@@ -279,49 +272,18 @@ fun SettingsScreen(
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "Binaural Headphone Crossfeed",
+                            text = "Latency Buffer Schedule",
                             color = TextPrimary,
                             fontSize = 14.sp,
                             fontWeight = FontWeight.SemiBold
                         )
                         Text(
-                            text = "BS2B acoustic simulation (-9.9 dB, 700 Hz corner) to eliminate listening fatigue from hard-panned stereo on headphones.",
+                            text = "Choose the audio buffering strategy the companion service negotiates.",
                             color = TextSecondary,
                             fontSize = 11.sp,
                             lineHeight = 15.sp
                         )
-                        Text(
-                            text = if (crossfeedAvailable) {
-                                "Reference player only — applied by the native C++ engine. Android's " +
-                                    "audio framework has no crossfeed effect, so it cannot be applied " +
-                                    "to other apps' audio."
-                            } else {
-                                "Unavailable — the native C++ engine did not load."
-                            },
-                            color = TextTertiary,
-                            fontSize = 10.sp,
-                            lineHeight = 13.sp
-                        )
                     }
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Switch(
-                        checked = state.isCrossfeedEnabled,
-                        onCheckedChange = { enabled ->
-                            hapticsManager.performPresetSelected()
-                            FxSoundRepository.setCrossfeed(enabled)
-                        },
-                        enabled = crossfeedAvailable,
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = Color.White,
-                            checkedTrackColor = FxRedPrimary,
-                            uncheckedThumbColor = TextDisabled,
-                            uncheckedTrackColor = DarkSurfaceElevated,
-                            disabledCheckedThumbColor = TextDisabled,
-                            disabledCheckedTrackColor = DarkSurfaceElevated,
-                            disabledUncheckedThumbColor = TextDisabled,
-                            disabledUncheckedTrackColor = DarkSurfaceElevated
-                        )
-                    )
                 }
 
                 Spacer(modifier = Modifier.height(16.dp))
@@ -367,77 +329,6 @@ fun SettingsScreen(
 
         Spacer(modifier = Modifier.height(24.dp))
 
-        // Native DSP Test Harness
-        Text(
-            text = "NATIVE C++ DSP TEST HARNESS",
-            color = TextSecondary,
-            fontSize = 11.sp,
-            fontWeight = FontWeight.Bold,
-            letterSpacing = 1.sp
-        )
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = DarkSurfaceCard),
-            shape = RoundedCornerShape(14.dp),
-            border = androidx.compose.foundation.BorderStroke(1.dp, BorderSubtle)
-        ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Text(
-                    text = "Reference In-App Playback",
-                    color = TextPrimary,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.SemiBold
-                )
-                Text(
-                    text = "Runs a reference acoustic multitone through the authentic C++ DfxDsp pipeline (`libfxsound_dsp.so`). Provides live True Peak and Spectrum analysis on the Home screen.",
-                    color = TextSecondary,
-                    fontSize = 12.sp,
-                    lineHeight = 16.sp
-                )
-
-                Spacer(modifier = Modifier.height(14.dp))
-
-                OutlinedButton(
-                    onClick = {
-                        hapticsManager.performPresetSelected()
-                        try {
-                            if (isHiFiPlaying) {
-                                hiFiPlayer.stopPlayback()
-                            } else {
-                                hiFiPlayer.startReferencePlayback("Multitone Signal")
-                            }
-                        } catch (e: Exception) {
-                            android.util.Log.e("SettingsScreen", "Error toggling reference playback: ${e.message}", e)
-                        }
-                    },
-                    colors = ButtonDefaults.outlinedButtonColors(
-                        contentColor = if (isHiFiPlaying) FxRedPrimary else TextPrimary
-                    ),
-                    border = androidx.compose.foundation.BorderStroke(
-                        1.dp,
-                        if (isHiFiPlaying) FxRedPrimary else BorderSubtle
-                    ),
-                    shape = RoundedCornerShape(8.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Icon(
-                        painter = painterResource(if (isHiFiPlaying) R.drawable.ic_stop else R.drawable.ic_play),
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = if (isHiFiPlaying) "Stop Reference C++ Playback" else "Play Reference Multitone (DfxDsp C++)"
-                    )
-                }
-            }
-        }
-
-        Spacer(modifier = Modifier.height(24.dp))
-
         // Engine Diagnostics
         Text(
             text = "AUDIO ENGINE DIAGNOSTICS",
@@ -461,10 +352,6 @@ fun SettingsScreen(
                 DiagnosticRow("Session ID", if (state.activeAudioSessionId != 0) state.activeAudioSessionId.toString() else "None")
                 DiagnosticRow("AudioFlinger DUMP", if (state.isEnhancedTrackingGranted) "Granted (Session Tracking)" else "Standard (Not Granted)")
                 DiagnosticRow("Native C++ Library", if (FxSoundNativeBridge.isNativeAvailable()) "Loaded (arm64-v8a / x86_64)" else "Unavailable")
-                DiagnosticRow(
-                    "Binaural Crossfeed",
-                    if (state.isCrossfeedEnabled) "BS2B Enabled (-9.9 dB, reference player)" else "Off"
-                )
                 DiagnosticRow("Latency Buffer", if (state.latencyMode == LatencyMode.LOW_LATENCY) "Low Latency (Fast)" else "Hi-Fi Studio")
                 DiagnosticRow("Dynamics Mode", "Time Resolution (Low Latency)")
                 DiagnosticRow(

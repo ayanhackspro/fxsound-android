@@ -196,6 +196,10 @@ const float kAmbienceWetZero = (12.0f / 127.0f) * 10.0f;
  * and has no move constructor, so copying it would free the core twice.
  */
 void initIsolatedEngine(FxSoundEngine& engine) {
+    // Measurement mode: the mapping data must isolate the upstream kernels, so the
+    // static preamp headroom compensation is off (its full boost compensation would
+    // cancel the effects being measured). The output limiter stays active.
+    engine.setHeadroomManagementEnabled(false);
     engine.init(static_cast<int>(kSampleRate), 2);
 
     engine.setEffect(FXSOUND_EFFECT_BASS, 0.0f);
@@ -240,6 +244,52 @@ int main(int argc, char** argv) {
         for (int p = 0; p < kProbeCount; ++p) {
             const double db = measureToneResponse(engine, kProbeFrequencies[p]);
             printf("magnitude,REFERENCE,0.0,%.1f,%.3f\n", kProbeFrequencies[p], db);
+            fflush(stdout);
+        }
+    }
+
+    // Diagnostic second reference: the same engine but with the 31-band graphic EQ
+    // flattened to 0 dB in every upstream state storage (memory and registry). If the
+    // reference notches come from the EQ's uninitialized pre-preset state, this curve is
+    // flat while the default one is not; if it is identical, the notches come from
+    // somewhere else.
+    {
+        FxSoundEngine engine;
+        initIsolatedEngine(engine);
+        engine.resetEQ();
+        for (int p = 0; p < kProbeCount; ++p) {
+            const double db = measureToneResponse(engine, kProbeFrequencies[p]);
+            printf("magnitude,REFERENCE_FLATEQ,0.0,%.1f,%.3f\n", kProbeFrequencies[p], db);
+            fflush(stdout);
+        }
+    }
+
+    // Batón test: raw passthrough. With the power off the engine copies input to output
+    // byte for byte, so this curve must read exactly 0.000 dB at every probe. If it
+    // does not, the tone generator or the Goertzel extractor is broken and every other
+    // curve here is meaningless.
+    {
+        FxSoundEngine engine;
+        initIsolatedEngine(engine);
+        engine.setPower(false);
+        for (int p = 0; p < kProbeCount; ++p) {
+            const double db = measureToneResponse(engine, kProbeFrequencies[p]);
+            printf("magnitude,REFERENCE_RAW,0.0,%.1f,%.3f\n", kProbeFrequencies[p], db);
+            fflush(stdout);
+        }
+    }
+
+    // Diagnostic third reference: the EQ stage bypassed entirely (eqOn(false)). If this
+    // curve is flat while the others are not, the notches live in the EQ stage even with
+    // zero gain on every band, which points at the band frequencies or filter
+    // construction rather than the gains.
+    {
+        FxSoundEngine engine;
+        initIsolatedEngine(engine);
+        engine.setEqEnabled(false);
+        for (int p = 0; p < kProbeCount; ++p) {
+            const double db = measureToneResponse(engine, kProbeFrequencies[p]);
+            printf("magnitude,REFERENCE_NOEQ,0.0,%.1f,%.3f\n", kProbeFrequencies[p], db);
             fflush(stdout);
         }
     }

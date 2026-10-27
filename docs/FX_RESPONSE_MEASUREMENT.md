@@ -64,9 +64,18 @@ plausible-looking but meaningless numbers, so the checks below matter:
 
 The reference curve is *not* flat — it has deep notches at several 1/3-octave band centres,
 which are stable across runs and survived averaging. The reverb's wet mix was ruled out as the
-cause. The likely explanation is the state of the upstream's 31-band graphic EQ before a preset
-is loaded, which would mean the reference player's default sound is comb filtered. This does
-not affect the incremental curves, because the notches are common to both and cancel exactly.
+cause.
+
+**2026-10-27 investigation update:** the graphic EQ is now ruled out too. Three diagnostic
+reference curves were added to the harness:
+`REFERENCE_FLATEQ` (all 31 bands forced to 0 dB in every upstream state storage via a new
+`DfxDsp::resetEQ()` path) and `REFERENCE_NOEQ` (the EQ stage bypassed entirely with
+`eqOn(false)`). Both are byte-identical to the plain reference, so neither the band gains
+nor the EQ stage explains the notches. A raw-passthrough check (`REFERENCE_RAW`, DSP power
+off, the engine copying the input verbatim) reads 0.000 dB at every probe, so the tone
+generator and the Goertzel extractor are correct. The notches therefore originate inside
+the upstream kernel itself, in stages that remain active at zero settings — the pre-preset
+graphic EQ hypothesis in the older text above is wrong, and this debt item is still open.
 
 ## What the measurements say
 

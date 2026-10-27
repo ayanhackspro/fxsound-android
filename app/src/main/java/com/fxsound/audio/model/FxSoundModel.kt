@@ -196,7 +196,6 @@ data class FxSoundUiState(
     val masterGainDb: Float = 0.0f,
     val hapticsMode: HapticsMode = HapticsMode.SYSTEM_DEFAULT,
     val outputDevice: AudioOutputDeviceType = AudioOutputDeviceType.BUILTIN_SPEAKER,
-    val isCrossfeedEnabled: Boolean = false,
     val latencyMode: LatencyMode = LatencyMode.STUDIO,
     val isEnhancedTrackingGranted: Boolean = false
 )

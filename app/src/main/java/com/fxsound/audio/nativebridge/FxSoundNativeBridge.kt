@@ -82,6 +82,13 @@ class FxSoundNativeBridge {
         return nativeGetMasterGain(nativeHandle)
     }
 
+    /** Flattens all 31 upstream graphic EQ bands to 0 dB in every state storage. */
+    fun resetEQ() {
+        if (nativeHandle != 0L) {
+            nativeResetEQ(nativeHandle)
+        }
+    }
+
     fun processPcm16(inBuf: ShortArray, outBuf: ShortArray, numFrames: Int): Int {
         if (nativeHandle == 0L) return 0
         return nativeProcessPcm16(nativeHandle, inBuf, outBuf, numFrames)
@@ -137,6 +144,7 @@ class FxSoundNativeBridge {
     private external fun nativeGetEqBand(handle: Long, bandIndex: Int): Float
     private external fun nativeSetMasterGain(handle: Long, gainDb: Float)
     private external fun nativeGetMasterGain(handle: Long): Float
+    private external fun nativeResetEQ(handle: Long)
     private external fun nativeProcessPcm16(handle: Long, inBuf: ShortArray, outBuf: ShortArray, numFrames: Int): Int
     private external fun nativeProcessFloat(handle: Long, inBuf: FloatArray, outBuf: FloatArray, numFrames: Int): Int
     private external fun nativeGetMetrics(handle: Long, outMetrics: FloatArray)

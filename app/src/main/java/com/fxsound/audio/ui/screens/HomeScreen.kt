@@ -39,7 +39,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.fxsound.audio.R
 import com.fxsound.audio.data.FxSoundRepository
-import com.fxsound.audio.engine.HiFiPlayerEngine
 import com.fxsound.audio.haptics.HapticsManager
 import com.fxsound.audio.model.FxSoundEffectId
 import com.fxsound.audio.model.FxSoundPreset
@@ -68,7 +67,6 @@ import com.fxsound.audio.ui.theme.TextTertiary
 @Composable
 fun HomeScreen(
     hapticsManager: HapticsManager,
-    hiFiPlayer: HiFiPlayerEngine,
     onNavigateToEqualizer: () -> Unit,
     onNavigateToPresets: () -> Unit,
     modifier: Modifier = Modifier
@@ -320,20 +318,12 @@ fun HomeScreen(
                     enabled = state.isPowerOn
                 )
 
-                // 2. Ambience / Stereo Reflections
-                // Ambience is applied by the native C++ DfxDsp core, so it only reaches the audio
-                // the app plays itself. Android's PresetReverb is an auxiliary effect, and an app
-                // cannot create the auxiliary send on another app's track, so it is not used for
-                // external sessions.
-                EffectSlider(
-                    name = "Ambience",
-                    description = "Natural acoustic reflections and room depth",
-                    value = state.effects[FxSoundEffectId.AMBIENCE] ?: 2.0f,
-                    onValueChange = { FxSoundRepository.setEffect(FxSoundEffectId.AMBIENCE, it) },
-                    hapticsManager = hapticsManager,
-                    enabled = state.isPowerOn && state.routeStatus == RouteStatus.PLAYING_HIFI,
-                    note = "Applied by the native C++ engine — reference player only"
-                )
+                // 2. Ambience
+                // Not displayed. Android's PresetReverb is an auxiliary effect: the source
+                // app must create the aux send, which cannot be done on another app's track,
+                // and the native DfxDsp core has no in-app player anymore. Showing a dead
+                // slider would misrepresent the engagement state.
+
 
                 // 3. Surround Sound / 3D Spatial
                 EffectSlider(

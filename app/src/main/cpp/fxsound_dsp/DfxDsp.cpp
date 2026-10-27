@@ -155,6 +155,11 @@ void DfxDsp::setMasterGain(float gain_db)
 	data_->setMasterGain(gain_db);
 }
 
+int DfxDsp::resetEQ()
+{
+	return data_->resetEQ();
+}
+
 float DfxDsp::getFilterQ()
 {
 	return data_->getFilterQ();

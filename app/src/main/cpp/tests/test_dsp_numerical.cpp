@@ -585,6 +585,86 @@ static bool testStereoChannelSeparation() {
     return true;
 }
 
+// Worst-case gain staging: near-full-scale input with every boost control maximised.
+//
+// The measured upstream Bass contour peaks at +13.9 dB (docs/FX_RESPONSE_MEASUREMENT.md),
+// the app's EQ allows +14 dB per band, and the master gain adds on top. A 0.95 full-scale
+// input at a bass frequency with all of that lifted is the configuration most likely to
+// hit the digital rail. Per docs/DSP_QUALITY_SPEC.md the output must stay finite and
+// bounded, and *must not* be flattened against the rail, which is hard clipping: a clipped
+// sample is effectively unusable output and measures as full-scale distortion.
+//
+// Tolerance: the limiter may exceed 0.999 briefly (its time constants need a few
+// milliseconds), but a sustained rail-flat run is a gain-staging failure. The test counts
+// consecutive samples at the rail and rejects inter-sample peaks above a hairline as
+// pathological.
+static bool testWorstCaseGainStaging() {
+    std::cout << "[TEST] Running Worst-Case Gain Staging Test..." << std::endl;
+
+    FxSoundEngine engine;
+    if (!engine.init(48000, 2)) return false;
+
+    engine.setEffect(FXSOUND_EFFECT_BASS, 10.0f);
+    engine.setEffect(FXSOUND_EFFECT_FIDELITY, 10.0f);
+    engine.setEffect(FXSOUND_EFFECT_SURROUND, 10.0f);
+    engine.setEffect(FXSOUND_EFFECT_DYNAMIC_BOOST, 10.0f);
+    engine.setEffect(FXSOUND_EFFECT_AMBIENCE, 10.0f);
+    for (int band = 0; band < engine.getNumEqBands(); ++band) {
+        engine.setEqBand(band, 14.0f);
+    }
+
+    const int numFrames = 4800; // 100 ms; long enough to capture sustained boosting
+    std::vector<float> inBuf(numFrames * 2, 0.0f);
+    // 0.95 full-scale bass note: leaves almost no headroom for +14 dB of lift.
+    for (int i = 0; i < numFrames; ++i) {
+        float s = static_cast<float>(0.95 * std::sin(2.0 * 3.14159265358979 * 60.0 * i / 48000.0));
+        inBuf[i * 2] = s;
+        inBuf[i * 2 + 1] = s;
+    }
+
+    std::vector<float> outBuf(numFrames * 2, 0.0f);
+    // Two renders: the first settles the parameter smoothing, the second is measured
+    // steady-state.
+    for (int pass = 0; pass < 2; ++pass) {
+        engine.processFloat(inBuf.data(), outBuf.data(), numFrames);
+    }
+
+    float maxAbs = 0.0f;
+    int clippedSamples = 0;      // |sample| >= 0.99999: on the rail
+    int longestRailRun = 0;
+    int currentRailRun = 0;
+    for (int i = 0; i < numFrames * 2; ++i) {
+        float s = outBuf[i];
+        if (std::isnan(s) || std::isinf(s)) {
+            std::cerr << "FAIL: NaN or Inf in worst-case output at sample " << i << std::endl;
+            return false;
+        }
+        maxAbs = std::max<float>(maxAbs, std::fabs(s));
+        if (std::fabs(s) >= 0.99999f) {
+            clippedSamples++;
+            currentRailRun++;
+            longestRailRun = std::max(longestRailRun, currentRailRun);
+        } else {
+            currentRailRun = 0;
+        }
+    }
+
+    std::cout << "  Output peak:         " << maxAbs << std::endl;
+    std::cout << "  Rail-clipped samples: " << clippedSamples << std::endl;
+    std::cout << "  Longest rail run:     " << longestRailRun << std::endl;
+
+    if (clippedSamples > 0) {
+        std::cerr << "FAIL: " << clippedSamples << " samples are pinned at the digital rail "
+                     "(hard clipping). Gain staging must prevent this: the headroom "
+                     "compensation has to attenuate the pre-gain before the boost stages."
+                  << std::endl;
+        return false;
+    }
+
+    std::cout << "  PASS: Worst-case boosts keep the output off the digital rail" << std::endl;
+    return true;
+}
+
 int main() {
     std::cout << "========================================" << std::endl;
     std::cout << "FxSound Native C++ Numerical DSP Tests" << std::endl;
@@ -603,6 +683,7 @@ int main() {
     pass &= testPcm16BoundedAndClamped();
     pass &= testEffectValuesReachTheKernel();
     pass &= testStereoChannelSeparation();
+    pass &= testWorstCaseGainStaging();
 
     if (pass) {
         std::cout << ">>> ALL NUMERICAL DSP TESTS PASSED <<<" << std::endl;

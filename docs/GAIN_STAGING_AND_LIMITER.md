@@ -116,6 +116,37 @@ because the design spec requires them to be documented.
   adds latency that depends on the device's audio HAL and buffer size; the app does not
   control or measure it.
 
+## Native C++ engine (reference player)
+
+`docs/DSP_PORT_AUDIT.md` section 9 previously recorded that this engine ran uncalibrated.
+It now has two protections, implemented under ADR-025 and verified by the new worst-case
+native test:
+
+1. **Static headroom pre-gain.** At parameter-sync time, the upstream master gain is set
+   to the user's master gain **minus** the worst-case positive gain the boosted stages can
+   add: the Bass contour (measured +13.9 dB at setting 10), the Dynamic Boost's make-up
+   (measured up to +11.8 dB), the largest positive EQ band plus 8% of the summed positive
+   bands, and any positive user master gain. This caps the attenuation at 30 dB. Because
+   it is computed from the smoothed settings, it never jumps; the master ramp glides it.
+2. **Output peak catcher.** After every other stage, a limiter holds the final sample
+   stream at **-0.026 dBFS**: instantaneous attack (the required gain is applied the
+   moment a sample needs it) and a one-pole 120 ms release. No lookahead; it acts on the
+   peak, not before it.
+
+`fxResponseMeasure` runs with the pre-gain off (`setHeadroomManagementEnabled(false)`) so
+the mapping data isolates the upstream kernels; the limiter itself remains active there.
+
+### Limitations
+
+- **Lookahead: none.** Same platform-independent property as above: the limiter catches
+  a peak by acting on it, so there can be a momentary overshoot within one sample's worth
+  of gain correction before the attack settles.
+- **True peak: not measured.** The limiter works on the sample stream; inter-sample peaks
+  are not reconstructed (the -0.026 dBFS ceiling is a cushion).
+- **Heavy sustained boosting below the 30 dB cap** still relies on the limiter for the
+  residual, so long-duration boosts into near-full-scale bass can produce gain reduction
+  that moves with the material.
+
 ## What is not claimed
 
 - The app does **not** claim to prevent clipping at the physical speaker or headphone output.

@@ -34,8 +34,8 @@ class FxSoundPreferencesDataStore(private val context: Context) {
         private val KEY_EQ_GAINS = stringPreferencesKey("eq_gains_csv")
         private val KEY_MASTER_GAIN = floatPreferencesKey("master_gain_db")
         private val KEY_HAPTICS_MODE = stringPreferencesKey("haptics_mode")
-        private val KEY_CROSSFEED = booleanPreferencesKey("crossfeed_enabled")
         private val KEY_LATENCY_MODE = stringPreferencesKey("latency_mode")
+        private val KEY_CUSTOM_PRESETS_JSON = stringPreferencesKey("custom_presets_json")
     }
 
     suspend fun loadState(): FxSoundUiState {
@@ -67,7 +67,6 @@ class FxSoundPreferencesDataStore(private val context: Context) {
             } catch (e: Exception) {
                 HapticsMode.SYSTEM_DEFAULT
             }
-            val crossfeed = prefs[KEY_CROSSFEED] ?: false
             val latencyStr = prefs[KEY_LATENCY_MODE] ?: com.fxsound.audio.model.LatencyMode.STUDIO.name
             val latencyMode = try {
                 com.fxsound.audio.model.LatencyMode.valueOf(latencyStr)
@@ -82,7 +81,6 @@ class FxSoundPreferencesDataStore(private val context: Context) {
                 eqGains = eqGains,
                 masterGainDb = masterGain,
                 hapticsMode = hapticsMode,
-                isCrossfeedEnabled = crossfeed,
                 latencyMode = latencyMode
             )
         } catch (e: Exception) {
@@ -103,8 +101,32 @@ class FxSoundPreferencesDataStore(private val context: Context) {
                 prefs[KEY_EQ_GAINS] = state.eqGains.joinToString(",") { String.format("%.2f", it) }
                 prefs[KEY_MASTER_GAIN] = state.masterGainDb
                 prefs[KEY_HAPTICS_MODE] = state.hapticsMode.name
-                prefs[KEY_CROSSFEED] = state.isCrossfeedEnabled
                 prefs[KEY_LATENCY_MODE] = state.latencyMode.name
+            }
+        } catch (e: Exception) {
+            // Non-fatal persistence failure
+        }
+    }
+
+    /**
+     * Loads the user's custom presets from the single JSON payload. Malformed data
+     * returns an empty list rather than throwing, so a corrupted entry cannot break app
+     * startup (ADR-009).
+     */
+    suspend fun loadCustomPresets(): List<FxSoundPreset> {
+        return try {
+            val prefs = context.dataStore.data.first()
+            PresetCodec.decode(prefs[KEY_CUSTOM_PRESETS_JSON])
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    /** Replaces the whole custom preset list atomically; deletes and renames included. */
+    suspend fun saveCustomPresets(presets: List<FxSoundPreset>) {
+        try {
+            context.dataStore.edit { prefs ->
+                prefs[KEY_CUSTOM_PRESETS_JSON] = PresetCodec.encode(presets)
             }
         } catch (e: Exception) {
             // Non-fatal persistence failure
