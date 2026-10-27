@@ -85,7 +85,27 @@ data class OpraCatalogue(
  * ("DSP_PEQ_SHELFS_ON … NO LONGER USED") and Android's DynamicsProcessing EqBand
  * exposes only (cutoff, gain)).
  */
-data class DspEqBand(val frequencyHz: Float, val gainDb: Float, val q: Float)
+data class DspEqBand(
+    val frequencyHz: Float,
+    val gainDb: Float,
+    val q: Float,
+    /**
+     * For approximated shelving bands: worst |dB| deviation from the original shelf across
+     * 20 Hz–20 kHz. Null for bands that were rendered verbatim.
+     */
+    val approximationErrorDb: Float? = null
+)
+
+/**
+ * Always shown wherever a converted curve is presented. Android's DynamicsProcessing
+ * `EqBand` accepts only (cutoff, gain) — the Q below is used by the native renderer and
+ * by the preview, but the platform chooses the actual band bandwidth for external
+ * sessions, so the rendered curve is an approximation of the modelled one.
+ */
+const val RENDERER_DISCLOSURE: String =
+    "Peaking-only renderer: the device applies its own band bandwidth and the preview " +
+        "shows the ideal Q, so this is an approximation of the OPRA target, not a " +
+        "measured transfer function."
 
 data class HeadphoneEqPlan(
     val profileId: String,
@@ -96,7 +116,12 @@ data class HeadphoneEqPlan(
     val preampDb: Float,
     val bands: List<DspEqBand>,
     /** Human-readable, UIVisible conversion disclosures (never silent substitutions). */
-    val conversionNotes: List<String>
+    val conversionNotes: List<String>,
+    /** Worst shelving-band approximation error on this profile, 0 when it has none. */
+    val maxShelfApproximationErrorDb: Float = 0f,
+    val rendererDisclosure: String = RENDERER_DISCLOSURE,
+    /** Per-band trims the user added (E4), aligned with [bands]; empty when untouched. */
+    val userBandOffsets: List<Float> = emptyList()
 )
 
 data class OpraApplyResult(val success: Boolean, val message: String)

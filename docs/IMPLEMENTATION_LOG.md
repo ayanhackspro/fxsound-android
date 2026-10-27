@@ -910,3 +910,54 @@ Keep this file updated as work progresses. Do not write planned work as complete
 - **Not done / pending:** on-device (Xiaomi 17) audio validation and real Spotify-session
   apply remain pending; dataset redistribution for bundled/offline-first distribution is
   intentionally not started.
+
+---
+
+### 2026-10-27 - OPRA hardening pass (docs/OPRA_HARDENING_PLAN.md)
+
+**Goal:** close every high/medium item from the post-integration review without deferring
+anything that could be fixed, and without claiming unmeasured fidelity.
+
+**A1 calibration (real dataset, 24,980 shelving bands):**
+`ShelfApproximationCalibrationTest` grid-searched Q 0.35-1.60 and gain scale 0.20-1.20
+against RBJ shelf targets over 61 log-spaced frequencies (20 Hz-20 kHz).
+
+- old constants Q 0.60 / x0.80: mean 0.84 dB
+- shipped constants Q 1.45 / x0.50: mean 0.79 dB, p50 0.45, p90 1.91, p99 4.12, max 9.87,
+  717/24,980 bands over 3 dB
+- measured two-band alternative: mean 0.63 dB, p99 2.65, max 8.60 - not shipped (band
+  budget vs 20-band cap, still cannot render the worst high-gain shelves); the residual is
+  now disclosed per profile instead
+
+**Honesty fixes:** plan-level renderer disclosure (platform bandwidth, ideal-Q preview),
+per-profile worst-case approximation error shown when >= 3 dB, preview labelled as ideal;
+Bass slider disabled with a note while a plan owns the low end; APPLIED cleared on session
+teardown and service destroy (plan stays PENDING), covered by `HeadphonePlanStateTest`.
+
+**Cache safety:** new `OpraCache` (validate / promote / restore / delete) plus a mutexed,
+`@Volatile` repository. Downloads are validated (JSON object, >=256 KB, >=1000 lines) and
+fully indexed before promotion; `.bak` rollback; live -> .bak -> single re-download
+recovery; DOWNLOADING vs INDEXING phases; "Delete downloaded data"; `files/opra` excluded
+from backup and device transfer.
+
+**Attribution:** CC BY-SA 4.0 link in-app, modification notice on screen,
+`docs/OPRA_NOTICE.md`, and `app/src/test/resources/opra_fixture.jsonl` (41 verbatim lines:
+10 vendors, 12 products, 19 profiles) exercised by `OpraFixtureTest` on every run.
+
+**UX:** pure, tested `OpraSearch` ranking (exact -> prefix -> word prefix -> contains ->
+vendor, multi-token narrowing, precomputed lowercase keys), variant-family warning,
+per-band ±6 dB trims persisted with the selection and applied by the pure
+`OpraProfileConverter.applyUserAdjustments`, master trim retained. Dead code removed
+(`enabled` param, shadowing divider, unused `summariesByProduct`); OPRA screen strings moved
+to `strings.xml` with 11sp minimum body copy and canvas/stepper content descriptions.
+
+**Commands run and actual results:**
+- `.\gradlew.bat testDebugUnitTest --no-daemon` (with and without `OPRA_DATASET_PATH`)
+  - BUILD SUCCESSFUL
+- `.\gradlew.bat testDebugUnitTest assembleDebug --no-daemon` with `OPRA_DATASET_PATH`
+  set - BUILD SUCCESSFUL (arm64-v8a + x86_64)
+- Full-dump smoke report unchanged: vendors=714 products=6230 profiles=12594
+  converted=12594 rejected=0 skippedLines=0
+
+**Still pending:** Xiaomi 17 / real Spotify-session listening and on-device verification of
+the platform band bandwidth. Nothing in this pass validates the audible result on hardware.

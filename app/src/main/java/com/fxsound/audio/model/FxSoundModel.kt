@@ -204,6 +204,14 @@ data class FxSoundUiState(
     val isHeadphonePlanApplied: Boolean = false
 )
 
+/**
+ * Attach-state transition for the OPRA headphone plan (B2): APPLIED is only ever true
+ * while a renderer has confirmed the attach. A teardown clears it but keeps the plan
+ * selected, so the UI falls back to PENDING rather than claiming stale success.
+ */
+fun FxSoundUiState.withHeadphoneAttachResult(success: Boolean): FxSoundUiState =
+    if (isHeadphonePlanApplied == success) this else copy(isHeadphonePlanApplied = success)
+
 enum class LatencyMode {
     STUDIO,       // High-fidelity standard buffer (1024-2048 frames) with maximum DSP resolution
     LOW_LATENCY   // Ultra-fast low latency buffer (256 frames, FAST flag) optimized for mobile gaming

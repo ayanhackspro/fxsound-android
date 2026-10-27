@@ -346,13 +346,23 @@ fun HomeScreen(
                 )
 
                 // 5. Bass Boost / HyperBass
+                // An OPRA headphone plan owns the Pre-EQ stage, so HyperBass is skipped while
+                // a profile is active (single-bass rule). The control must show that instead
+                // of pretending to work (B1).
+                val headphonePlanActive = state.headphonePlan != null
                 EffectSlider(
                     name = "Bass Boost",
-                    description = "HyperBass low-frequency acoustic depth and punch",
+                    description = if (headphonePlanActive)
+                        "Low frequencies are shaped by the active headphone profile"
+                    else
+                        "HyperBass low-frequency acoustic depth and punch",
                     value = state.effects[FxSoundEffectId.BASS] ?: 4.0f,
                     onValueChange = { FxSoundRepository.setEffect(FxSoundEffectId.BASS, it) },
                     hapticsManager = hapticsManager,
-                    enabled = state.isPowerOn
+                    enabled = state.isPowerOn && !headphonePlanActive,
+                    note = if (headphonePlanActive)
+                        "Headphone profile active — this slider is not applied. Remove the profile in the Phones tab to use it."
+                    else null
                 )
             }
         }

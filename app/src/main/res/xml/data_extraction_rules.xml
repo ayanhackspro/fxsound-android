@@ -2,8 +2,11 @@
 <data-extraction-rules>
     <cloud-backup>
         <exclude domain="root" path="." />
+        <!-- The OPRA dump is a 12.6 MB download; never ship it through backup. -->
+        <exclude domain="file" path="opra" />
     </cloud-backup>
     <device-transfer>
         <exclude domain="root" path="." />
+        <exclude domain="file" path="opra" />
     </device-transfer>
 </data-extraction-rules>

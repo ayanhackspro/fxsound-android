@@ -535,6 +535,9 @@ class SessionCompanionService : Service() {
             FxSoundRepository.setRouteStatus(status, remaining.packageName, remaining.sessionId)
             updateNotification(status, remaining.packageName)
         } else {
+            // No supported session left: the plan is no longer attached to any renderer, so
+            // it must fall back to PENDING instead of claiming APPLIED forever (B2).
+            FxSoundRepository.onHeadphoneAttachResult(false)
             val isPlaying = audioManager?.isMusicActive ?: false
             val fallbackStatus = if (isPlaying) RouteStatus.PARTIAL else RouteStatus.READY
             val fallbackPkg = if (isPlaying) "System Audio" else null
@@ -676,6 +679,8 @@ class SessionCompanionService : Service() {
             releaseSessionEffects(session)
         }
         activeSessions.clear()
+        // No session can still have the plan attached (B2).
+        FxSoundRepository.onHeadphoneAttachResult(false)
     }
 
     private fun createNotificationChannel() {

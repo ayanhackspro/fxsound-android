@@ -9,6 +9,7 @@ import com.fxsound.audio.model.FxSoundUiState
 import com.fxsound.audio.model.HapticsMode
 import com.fxsound.audio.model.LatencyMode
 import com.fxsound.audio.model.RouteStatus
+import com.fxsound.audio.model.withHeadphoneAttachResult
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -99,7 +100,8 @@ object FxSoundRepository {
     fun setHeadphonePlan(
         plan: com.fxsound.audio.opra.HeadphoneEqPlan?,
         profile: com.fxsound.audio.opra.OpraEqProfile?,
-        adjustDb: Float
+        adjustDb: Float,
+        bandOffsets: List<Float> = emptyList()
     ) {
         _uiState.update {
             it.copy(headphonePlan = plan, isHeadphonePlanApplied = false)
@@ -107,15 +109,18 @@ object FxSoundRepository {
         notifyStateChanged()
         repoScope.launch {
             preferencesDataStore?.saveOpraSelection(
-                if (profile != null) com.fxsound.audio.opra.OpraJson.encodeForPersistence(profile, adjustDb)
-                else null
+                if (profile != null) {
+                    com.fxsound.audio.opra.OpraJson.encodeForPersistence(profile, adjustDb, bandOffsets)
+                } else {
+                    null
+                }
             )
         }
     }
 
     /** The companion service confirms (or rejects) a DynamicsProcessing attach using the plan. */
     fun onHeadphoneAttachResult(success: Boolean) {
-        _uiState.update { it.copy(isHeadphonePlanApplied = success) }
+        _uiState.update { it.withHeadphoneAttachResult(success) }
         opraInstance?.confirmApplied(success)
     }
 

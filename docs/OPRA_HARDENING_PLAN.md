@@ -1,11 +1,63 @@
 # OPRA Integration Hardening Plan
 
-Status: in progress
+Status: **implemented** (device validation still pending — see deferred items)
 Date: 2026-10-27
 Prerequisite: ADR-028 (initial integration). This plan closes the weaknesses found in the
 first review. Every item ends with a measurable check; no "improved" claim without a run.
 
-## Workstream A — Accuracy & honesty of the DSP mapping
+## Results vs. plan (2026-10-27)
+
+A1 **measured, not guessed.** Grid search over all 24,980 shelving bands in the real dump
+(`ShelfApproximationCalibrationTest`):
+
+| Strategy | mean | p99 | max | bands > 3 dB |
+|---|---|---|---|---|
+| old constants (Q 0.60, ×0.80) | 0.84 dB | — | — | — |
+| **shipped** (Q 1.45, ×0.50) | **0.79 dB** | 4.12 dB | 9.87 dB | 717 / 24,980 |
+| two-band split (not shipped) | 0.63 dB | 2.65 dB | 8.60 dB | 183 / 24,980 |
+
+The residual is concentrated in high-gain high shelves (a +14 dB shelf above 2.2 kHz is
+not a bell at all). A two-band split halves the p99 but still cannot fix those curves,
+costs a second band per shelf against the 20-band cap, and complicates the converter; the
+shipped alternative is to keep one band and **report each profile's own worst-case
+deviation** in the UI (and in its conversion notes). Decision recorded in ADR-028
+amendment.
+
+A2 **done.** `HeadphoneEqPlan.rendererDisclosure` is always set; the UI labels the preview
+"ideal peaking model (not measured on the device)" and states that the platform chooses
+the band bandwidth. Test asserts it.
+
+B1 **done.** Bass slider disabled with an explanatory note while a plan is active.
+B2 **done.** `withHeadphoneAttachResult(false)` on session teardown / service destroy;
+plan stays selected (PENDING). Unit tested in `HeadphonePlanStateTest`.
+
+C1 **done.** `.tmp` download validated (JSON object, ≥256 KB, ≥1000 lines) *and* fully
+indexed before promotion; previous file kept as `.bak`.
+C2 **done.** Recovery chain: live file → `.bak` → single re-download.
+C3 **done.** `Mutex` + `@Volatile` index/search; load/refresh/delete serialised.
+C4 **done.** Separate DOWNLOADING/INDEXING phases, stale-copy banner, "Delete downloaded
+data" action, `files/opra` excluded from backup and device transfer.
+Tests: `OpraCacheTest` (temp dirs, no Android context).
+
+D1 **done.** CC BY-SA 4.0 link, modification notice on screen, creator credit first/larger.
+D2 **done.** `docs/OPRA_NOTICE.md`.
+D3 **done.** `app/src/test/resources/opra_fixture.jsonl` — 41 verbatim lines (10 vendors,
+12 products, 19 profiles) + `OpraFixtureTest` runs by default.
+
+E1 **done.** `OpraSearch` (pure, tested): exact → prefix → word-prefix → contains →
+vendor; precomputed lowercase keys; multi-token narrowing; variant-family warning in UI.
+E2 **partly done.** 11sp minimum body copy in the OPRA screen, `contentDescription` on the
+response canvas and on the ± buttons, OPRA screen strings moved to `strings.xml`.
+*Not done:* the rest of the app's hardcoded strings (out of scope for this workstream); the
+catalogue rows are navigation (tapping opens the detail), so there is no persistent
+"selected" row state to expose — rows are clickable columns with button-like behaviour
+rather than a selection list. A formal TalkBack pass still needs a device.
+E3 **done.** Dead `enabled` param removed, divider renamed `OpraDivider` (no longer shadows
+Material 3), unused `summariesByProduct` dropped, loading phases split.
+E4 **done.** `applyUserAdjustments` is pure and unit tested; per-band ±6 dB steppers, reset,
+master slider; offsets persist in `opra_selection_json` and restore.
+
+## Workstream A — Accuracy & honesty of the DSP mapping (original text)
 
 A1. Quantify the shelf→peaking approximation.
    - Build an analytic biquad comparison (RBJ low/high shelf vs RBJ peaking) on the JVM.
@@ -73,12 +125,19 @@ E4. Per-band user adjustment (spec's "custom adjustments"): persisted offsets pe
 
 ## Deliberately deferred (with reasons)
 
+- Two-band shelf approximation: measured at 0.63 dB mean / 2.65 dB p99 vs 0.79 / 4.12,
+  but it still cannot represent the worst high-gain shelves (max 8.6 dB), doubles the band
+  count against the 20-band cap, and complicates the converter. The residual is disclosed
+  per profile instead. Revisit if real-device listening shows the tail matters.
 - Product line-art thumbnails: vendor artwork introduces separate trademark/asset
   questions and a new image pipeline; revisit after the redistribution review for assets.
 - Auto-matching the connected Bluetooth device name: needs `BLUETOOTH_CONNECT` and adds
   a permission prompt; not required for the PoC.
+- Full app-wide string externalisation / TalkBack pass: this workstream covered the new
+  OPRA screen only.
 - True on-device audio validation: blocked until the Xiaomi 17 is available. Analytic and
-  JVM evidence is reported, device validation stays explicitly pending.
+  JVM evidence is reported, device validation stays explicitly pending (AGENTS.md rules 2
+  and 14).
 
 ## Execution order
 

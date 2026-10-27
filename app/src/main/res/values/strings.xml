@@ -1,3 +1,45 @@
 <resources>
     <string name="app_name">FxSound</string>
+
+    <!-- OPRA headphone tuning -->
+    <string name="opra_title">HEADPHONE TUNING</string>
+    <string name="opra_subtitle">Community-measured EQ correction curves for your exact headphone model.</string>
+    <string name="opra_attribution_title">Powered by OPRA — Open Profiles for Revealing Audio</string>
+    <string name="opra_attribution_license">Data licensed %1$s; each profile credits its creator.</string>
+    <string name="opra_project_link">OPRA project ↗</string>
+    <string name="opra_license_link">CC BY-SA 4.0 ↗</string>
+    <string name="opra_check_updates">Check for updates</string>
+    <string name="opra_delete_data">Delete downloaded data</string>
+    <string name="opra_downloading">Downloading OPRA database (about 12 MB, once)…</string>
+    <string name="opra_checking_updates">Checking for updates…</string>
+    <string name="opra_indexing">Indexing headphone database…</string>
+    <string name="opra_search_hint">Search headphones or brand…</string>
+    <string name="opra_search_cap">Showing the first 100 matches — refine the search to narrow it down.</string>
+    <string name="opra_no_cache">No profiles cached yet — check connectivity.</string>
+    <string name="opra_no_match">No model matches “%1$s”. OPRA only carries measured models; nothing is invented.</string>
+    <string name="opra_row_meta">%1$d profile(s) · %2$s</string>
+    <string name="opra_ambiguous_warning">Several near-identical models match (e.g. ANC on/off variants). Pick the exact variant that matches your headphones.</string>
+    <string name="opra_remove_profile">Remove headphone profile</string>
+    <string name="opra_status_applied">APPLIED · %1$s — %2$s</string>
+    <string name="opra_status_pending">PENDING · %1$s — %2$s (applies when an audio session attaches)</string>
+    <string name="opra_profile_by">Profile by %1$s</string>
+    <string name="opra_measurement_source">Measurement source ↗</string>
+    <string name="opra_profile_meta">Preamp %1$s dB · %2$d bands</string>
+    <string name="opra_profile_meta_shelf"> · %1$d shelf (approximated)</string>
+    <string name="opra_profile_meta_unsupported"> · %1$d unsupported</string>
+    <string name="opra_profile_unparseable">This profile could not be parsed — it is shown but not offered.</string>
+    <string name="opra_profile_unrenderable">This profile cannot be rendered (it exceeds the band limit or has no usable filters).</string>
+    <string name="opra_ideal_preview">Ideal peaking model (not measured on the device)</string>
+    <string name="opra_approximation_error">Shelf approximation error up to %1$s dB on this profile — the renderer cannot reproduce shelving filters exactly.</string>
+    <string name="opra_apply">APPLY PROFILE</string>
+    <string name="opra_back">← All headphones</string>
+    <string name="opra_level">Profile level</string>
+    <string name="opra_per_band_title">Per-band trim</string>
+    <string name="opra_per_band_reset">Reset</string>
+    <string name="opra_per_band_hint">Adjust individual bands ±6 dB. Applied on top of the profile.</string>
+    <string name="opra_band_label">%1$s Hz</string>
+    <string name="opra_shelf_tag">shelf approx.</string>
+    <string name="opra_decrease">Decrease %1$s by 0.5 dB</string>
+    <string name="opra_increase">Increase %1$s by 0.5 dB</string>
+    <string name="opra_curve_description">Predicted EQ response curve for the selected profile</string>
 </resources>

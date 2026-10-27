@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <full-backup-content>
     <exclude domain="root" path="." />
+    <!-- The OPRA dump is a 12.6 MB download; never ship it through backup. -->
+    <exclude domain="file" path="opra" />
 </full-backup-content>

@@ -412,3 +412,53 @@ disclosed in the preview and notes. Profiles cannot be applied on the Equalizer 
 (no arbitrary frequencies), so those sessions keep the PENDING state. Real-device audio
 validation on the Xiaomi 17 is still pending; counts and conversion were verified against
 the real 12,594-profile dump on the JVM.
+
+## ADR-028 amendment: measured shelf approximation, honest renderer disclosure, cache safety
+**Date:** 2026-10-27
+**Status:** Accepted (amends ADR-028)
+
+**Context:** the first integration shipped hand-picked shelf→peaking constants (Q 0.6,
+×0.8) and a preview that implied the renderer used the OPRA Q values. Review also found
+missing cache validation, a stale "APPLIED" state, and incomplete attribution.
+
+**Decision:**
+1. **Constants are measured, not chosen.** `ShelfApproximationCalibrationTest` compares the
+   RBJ shelf response with the RBJ peaking approximation for every shelving band in the
+   real dump (24,980 bands) and grid-searches Q and gain scale. The optimum is Q = 1.45 and
+   gain × 0.50, mean |dB| error 0.79 dB (previously 0.84 dB). The test is part of the suite
+   and asserts the shipped constants still match the measured optimum when the dataset is
+   available.
+2. **The residual is disclosed per profile.** The dataset tail is high-gain high shelves
+   (a +14 dB shelf above 2.2 kHz cannot be one bell): p99 4.12 dB, worst 9.87 dB, 2.9 % of
+   bands over 3 dB. `OpraProfileConverter` computes each profile's own worst-case deviation
+   analytically and stores it in the plan; the UI shows it whenever it is ≥ 3 dB, and the
+   conversion notes always state the rule. A two-band split was measured (0.63 dB mean,
+   2.65 dB p99) and rejected: it doubles band usage, still cannot fix the worst curves,
+   and would fight the 20-band cap.
+3. **Renderer honesty.** Every plan carries `RENDERER_DISCLOSURE`; the preview is labelled
+   "ideal peaking model (not measured on the device)" because Android's
+   `DynamicsProcessing.EqBand` chooses its own bandwidth and ignores the modelled Q on the
+   external-session path.
+4. **State honesty.** A headphone plan owns the low end, so the Bass slider is disabled
+   with a note while one is active. `isHeadphonePlanApplied` is true only while a renderer
+   confirms it: session teardown and service destroy clear it, and the plan stays
+   selected/PENDING. The transition is a pure function (`withHeadphoneAttachResult`) so it
+   is unit tested.
+5. **Cache safety.** Downloads go to `.tmp`, are rejected unless they look like the JSONL
+   dump (JSON object, ≥ 256 KB, ≥ 1000 lines) and fully index, and only then replace the
+   live file; the previous copy is kept as `.bak`. Load/refresh/delete are serialised with
+   a mutex and the index is `@Volatile`. Failure recovery is live file → `.bak` → a single
+   re-download. The 12.6 MB cache is excluded from backup and device transfer and can be
+   deleted from the UI.
+6. **Attribution completeness.** The CC BY-SA 4.0 licence text is linked in-app, the
+   modification of shelving filters is stated on screen and in `docs/OPRA_NOTICE.md`, and a
+   small attributed fixture (`opra_fixture.jsonl`, 41 verbatim lines) keeps parsing and
+   conversion regression-tested in CI without the full dump.
+7. **Per-band user trims** are persisted with the selection (backward-compatible JSON) and
+   applied by a pure, tested function; the published curve itself is never rewritten.
+
+**Consequences:** the app no longer presents an approximated curve as exact, and a
+corrupt or hostile download can no longer destroy a working catalogue. Real-device
+listening on the Xiaomi 17 remains pending; the Q values only affect the native renderer
+and the preview, while the gain scale affects the DynamicsProcessing path used for
+external sessions.

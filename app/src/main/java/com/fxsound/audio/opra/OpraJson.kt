@@ -18,7 +18,6 @@ object OpraJson {
 
     class IndexResult(
         val catalogue: OpraCatalogue,
-        val summariesByProduct: Map<String, List<OpraEqSummary>>,
         val profileOffsets: Map<String, Long>,
         val skippedLines: Int
     )
@@ -117,7 +116,6 @@ object OpraJson {
         }
         return IndexResult(
             catalogue = OpraCatalogue(vendors, entries),
-            summariesByProduct = summaries,
             profileOffsets = offsets,
             skippedLines = skipped
         )
@@ -162,8 +160,12 @@ object OpraJson {
         )
     }
 
-    /** Serializes the user's selected profile (plus global adjustment) for DataStore persistence. */
-    fun encodeForPersistence(profile: OpraEqProfile, adjustDb: Float = 0f): String {
+    /** Serializes the user's selected profile (plus adjustments) for DataStore persistence. */
+    fun encodeForPersistence(
+        profile: OpraEqProfile,
+        adjustDb: Float = 0f,
+        bandOffsets: List<Float> = emptyList()
+    ): String {
         val sb = StringBuilder()
         sb.append("{")
         sb.append("\"id\":\"").append(escape(profile.id)).append("\",")
@@ -173,6 +175,12 @@ object OpraJson {
         sb.append("\"link\":\"").append(escape(profile.link ?: "")).append("\",")
         sb.append("\"preampDb\":").append(profile.preampDb).append(",")
         sb.append("\"adjustDb\":").append(adjustDb).append(",")
+        sb.append("\"bandOffsets\":[")
+        bandOffsets.forEachIndexed { i, db ->
+            if (i > 0) sb.append(",")
+            sb.append(db)
+        }
+        sb.append("],")
         sb.append("\"bands\":[")
         profile.bands.forEachIndexed { i, b ->
             if (i > 0) sb.append(",")
@@ -188,8 +196,12 @@ object OpraJson {
         return sb.toString()
     }
 
-    /** A selected profile plus the user's global adjustment, restored across restarts. */
-    class PersistedSelection(val profile: OpraEqProfile, val adjustDb: Float)
+    /** A selected profile plus the user's adjustments, restored across restarts. */
+    class PersistedSelection(
+        val profile: OpraEqProfile,
+        val adjustDb: Float,
+        val bandOffsets: List<Float> = emptyList()
+    )
 
     fun decodeFromPersistence(json: String): PersistedSelection? {
         return try {
@@ -215,7 +227,13 @@ object OpraJson {
                 preampDb = (f["preampDb"] as? Number)?.toFloat() ?: 0.0f,
                 bands = bands
             )
-            PersistedSelection(profile, (f["adjustDb"] as? Number)?.toFloat() ?: 0f)
+            PersistedSelection(
+                profile = profile,
+                adjustDb = (f["adjustDb"] as? Number)?.toFloat() ?: 0f,
+                bandOffsets = (f["bandOffsets"] as? List<*>)?.mapNotNull {
+                    (it as? Number)?.toFloat()
+                } ?: emptyList()
+            )
         } catch (e: Exception) {
             null
         }

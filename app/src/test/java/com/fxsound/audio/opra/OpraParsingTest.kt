@@ -65,13 +65,22 @@ class OpraParsingTest {
     @Test
     fun `persistence round-trips the selected profile`() {
         val profile = OpraJson.parseProfile(eqLine)!!
-        val json = OpraJson.encodeForPersistence(profile, adjustDb = -1.5f)
+        val json = OpraJson.encodeForPersistence(profile, adjustDb = -1.5f, bandOffsets = listOf(0f, 1.5f, -2f))
         val restored = OpraJson.decodeFromPersistence(json)!!
         assertEquals(profile.id, restored.profile.id)
         assertEquals(profile.productId, restored.profile.productId)
         assertEquals(profile.author, restored.profile.author)
         assertEquals(profile.bands.size, restored.profile.bands.size)
         assertEquals(-1.5f, restored.adjustDb)
+        assertEquals(listOf(0f, 1.5f, -2f), restored.bandOffsets)
+    }
+
+    @Test
+    fun `persistence without band offsets stays backward compatible`() {
+        val profile = OpraJson.parseProfile(eqLine)!!
+        val legacy = OpraJson.encodeForPersistence(profile, adjustDb = 0f)
+        val restored = OpraJson.decodeFromPersistence(legacy)!!
+        assertTrue("older payloads decode to no per-band trims", restored.bandOffsets.isEmpty())
     }
 }
 
@@ -91,13 +100,51 @@ class OpraProfileConverterTest {
         val plan = OpraProfileConverter.convert(profile)!!
         assertEquals(-5f, plan.preampDb)
         assertEquals(3, plan.bands.size)
-        // shelf -> peaking at same corner, Q = 0.6, gain scaled by 0.8
-        assertEquals(0.6f, plan.bands[0].q)
-        assertEquals(-1.4f * OpraProfileConverter.SHELF_APPROX_GAIN_SCALE, plan.bands[0].gainDb)
+        // shelf -> peaking at the same corner, using the calibrated constants (A1)
+        assertEquals(OpraProfileConverter.SHELF_APPROX_Q, plan.bands[0].q)
+        assertEquals(-1.4f * OpraProfileConverter.SHELF_APPROX_GAIN_SCALE, plan.bands[0].gainDb, 1e-6f)
         // peak_dip verbatim
         assertEquals(170f, plan.bands[1].frequencyHz)
         assertEquals(1.47f, plan.bands[1].q)
+        assertNull("verbatim bands carry no approximation error", plan.bands[1].approximationErrorDb)
+        assertNotNull("approximated shelves report their error", plan.bands[0].approximationErrorDb)
         assertEquals(1, plan.conversionNotes.size) // one note: shelf approximation only
+        assertTrue(plan.conversionNotes[0].contains("worst-case deviation"))
+    }
+
+    @Test
+    fun `calibrated constants are the measured dataset optimum`() {
+        // Pinned by ShelfApproximationCalibrationTest over the real 24,980 shelving bands.
+        assertEquals(1.45f, OpraProfileConverter.SHELF_APPROX_Q)
+        assertEquals(0.50f, OpraProfileConverter.SHELF_APPROX_GAIN_SCALE)
+    }
+
+    @Test
+    fun `every plan discloses that the renderer is peaking-only`() {
+        val profile = OpraEqProfile(
+            "t", "p", "A", null, null, -1f,
+            listOf(OpraBand(OpraBandType.PEAK_DIP, 1000f, 3f, 1f))
+        )
+        val plan = OpraProfileConverter.convert(profile)!!
+        assertEquals(RENDERER_DISCLOSURE, plan.rendererDisclosure)
+        assertTrue(plan.rendererDisclosure.contains("band bandwidth"))
+        // A peaking-only profile needs no approximation error.
+        assertEquals(0f, plan.maxShelfApproximationErrorDb)
+    }
+
+    @Test
+    fun `high-gain high shelf reports a large approximation error instead of hiding it`() {
+        val band = OpraBand(OpraBandType.HIGH_SHELF, 2200f, 14f, 0.71f)
+        val profile = OpraEqProfile(
+            "t", "p", "A", null, null, 0f,
+            listOf(OpraBand(OpraBandType.PEAK_DIP, 1000f, -2f, 1f), band)
+        )
+        val plan = OpraProfileConverter.convert(profile)!!
+        assertTrue(
+            "a +14 dB high shelf cannot be one bell; the error must be reported",
+            plan.maxShelfApproximationErrorDb > 5f
+        )
+        assertTrue(plan.conversionNotes[0].contains("worst-case deviation"))
     }
 
     @Test
@@ -123,6 +170,52 @@ class OpraProfileConverterTest {
         }
         val profile = OpraEqProfile("x", "p", "A", null, null, -3f, bands)
         assertNull(OpraProfileConverter.convert(profile))
+    }
+
+    @Test
+    fun `per-band trims and the master trim combine and are disclosed`() {
+        val profile = OpraEqProfile(
+            "t", "p", "A", null, null, -1f,
+            listOf(
+                OpraBand(OpraBandType.PEAK_DIP, 1000f, 2f, 1f),
+                OpraBand(OpraBandType.PEAK_DIP, 4000f, -3f, 1f)
+            )
+        )
+        val plan = OpraProfileConverter.convert(profile)!!
+        val adjusted = OpraProfileConverter.applyUserAdjustments(
+            plan,
+            masterAdjustDb = 1f,
+            bandOffsets = listOf(2f, -1f)
+        )
+        assertEquals(2f + 2f + 1f, adjusted.bands[0].gainDb, 1e-6f)
+        assertEquals(-3f - 1f + 1f, adjusted.bands[1].gainDb, 1e-6f)
+        assertEquals(listOf(2f, -1f), adjusted.userBandOffsets)
+        assertTrue(adjusted.conversionNotes.any { it.contains("User adjustment: +1.0 dB") })
+        assertTrue(adjusted.conversionNotes.any { it.contains("User per-band trims") })
+        // The original plan is untouched (pure function).
+        assertEquals(2f, plan.bands[0].gainDb, 1e-6f)
+    }
+
+    @Test
+    fun `band trims are clamped to the documented range`() {
+        val band = OpraBand(OpraBandType.PEAK_DIP, 1000f, 0f, 1f)
+        val plan = OpraProfileConverter.convert(
+            OpraEqProfile("t", "p", "A", null, null, 0f, listOf(band))
+        )!!
+        val adjusted = OpraProfileConverter.applyUserAdjustments(plan, 0f, listOf(50f))
+        assertEquals(6f, adjusted.userBandOffsets[0], 1e-6f)
+        assertEquals(6f, adjusted.bands[0].gainDb, 1e-6f)
+    }
+
+    @Test
+    fun `untouched plan needs no adjustment note`() {
+        val band = OpraBand(OpraBandType.PEAK_DIP, 1000f, 2f, 1f)
+        val plan = OpraProfileConverter.convert(
+            OpraEqProfile("t", "p", "A", null, null, 0f, listOf(band))
+        )!!
+        val same = OpraProfileConverter.applyUserAdjustments(plan, 0f, emptyList())
+        assertEquals(plan.bands, same.bands)
+        assertEquals(plan.conversionNotes, same.conversionNotes)
     }
 
     @Test
