@@ -33,15 +33,16 @@ object DynamicsProcessingTranslator {
     const val FALLBACK_BASS_BOOST_MAX_STRENGTH = 550
 
     /**
-     * Output limiter calibration. The release time is deliberately long enough that a bass
-     * transient does not pump the whole broadband mix
-     * (docs/AUDIO_BUG_INVESTIGATION.md, Finding 1.2).
+     * Output limiter calibration. The limiter is a safety net, not the level control:
+     * with full preamp compensation a static boost should never reach it, so its job is
+     * only to catch peaks. A moderate ratio, slower attack and long release keep a lone
+     * transient from ducking the whole mix (docs/AUDIO_BUG_INVESTIGATION.md, Finding 1.2).
      */
     object LimiterSpec {
-        const val ATTACK_TIME_MS = 1.0f
-        const val RELEASE_TIME_MS = 120.0f
-        const val RATIO = 20.0f
-        const val THRESHOLD_DBFS = -0.2f
+        const val ATTACK_TIME_MS = 5.0f
+        const val RELEASE_TIME_MS = 250.0f
+        const val RATIO = 6.0f
+        const val THRESHOLD_DBFS = -1.0f
         const val POST_GAIN_DB = 0.0f
     }
 
@@ -169,18 +170,10 @@ object DynamicsProcessingTranslator {
         // The clarity contribution is the upstream DSP's measured response: a presence-and-air
         // shelf from 2.5 kHz to 16 kHz with a scoop around 800 Hz to 1 kHz.
         val clarityBandGains = FxSoundResponseTables.fidelityBandGainsDb(clarity)
-        var maxPositiveEqBoost = 0.0f
-        var positiveGainSum = 0.0f
         val postEq = Eq(true, isPowerOn, 10).apply {
             for (i in 0 until 10) {
                 val userGain = eqGains.getOrElse(i) { 0.0f }
                 val totalGain = (userGain + clarityBandGains[i]).coerceIn(-14.0f, 14.0f)
-                if (totalGain > 0.0f) {
-                    positiveGainSum += totalGain
-                }
-                if (totalGain > maxPositiveEqBoost) {
-                    maxPositiveEqBoost = totalGain
-                }
                 setBand(i, EqBand(true, EQ_FREQUENCIES[i].toFloat(), totalGain))
             }
         }
@@ -197,9 +190,19 @@ object DynamicsProcessingTranslator {
             LimiterSpec.POST_GAIN_DB      // must be 0dB (prevents duplicate master gain application)
         )
 
-        // 5. Intelligent Preamp Headroom Allocation
-        // Proportional headroom prevents heavy bass transients from repeatedly ducking the limiter
-        val headroomCompensationDb = calculateHeadroomCompensationDb(bass, eqGains, clarity, headphonePlan)
+        // 5. Level-independent gain staging
+        // Every static gain in the chain above the limiter — bass Pre-EQ, the maximiser's
+        // make-up gain and the post-EQ/clarity boosts — is compensated at the input. Without
+        // that, a fixed boost pushes louder material into the limiter and quieter material
+        // not at all, which is exactly why the same setting sounded strong at low volume and
+        // nearly inaudible at high volume.
+        val headroomCompensationDb = calculateHeadroomCompensationDb(
+            bass,
+            eqGains,
+            clarity,
+            headphonePlan,
+            dynamicBoost
+        )
         val finalInputGainDb = (
             masterGainDb - headroomCompensationDb + (headphonePlan?.preampDb ?: 0.0f)
             ).coerceIn(-24.0f, 6.0f)
@@ -224,21 +227,35 @@ object DynamicsProcessingTranslator {
     }
 
     /**
-     * Calculates calibrated preamp headroom compensation (0.0 to 6.0 dB) to eliminate
-     * volume pumping artifacts during high bass boost while preserving full dynamic punch.
+     * Calculates the input headroom, in dB, that keeps the chain linear.
      *
-     * Models the DynamicsProcessing path, where the Pre-EQ contour is the only
-     * low-frequency boost in effect. The Equalizer fallback path has no input-gain stage and
-     * therefore no headroom control; it bounds bass instead by capping the standalone
-     * `BassBoost` strength (see [FALLBACK_BASS_BOOST_MAX_STRENGTH]).
+     * The output is level-independent: a static boost is compensated before it reaches the
+     * limiter, so the perceived amount of bass/clarity no longer depends on how loud the
+     * source material or the phone volume is. The previous 0.35 factor deliberately
+     * under-compensated, which left the limiter doing the level control and produced audible
+     * pumping. The compensation now covers the full peak potential:
+     *
+     * - the largest simultaneous static boost (bass Pre-EQ peak or the highest post-EQ band),
+     * - a small allowance for neighbouring bands summing,
+     * - the maximiser's broadband make-up gain, which sits between the two EQs.
+     *
+     * It is capped at 24 dB because the DynamicsProcessing input gain is clamped to -24 dB;
+     * asking for more than that would silently stop being applied.
+     *
+     * The Equalizer fallback path has no input-gain stage, so it cannot use this; it folds
+     * its peak boost into a band-level offset instead (see the service's applyEqualizerBands).
+     *
      * @param headphonePlan when present its positive band gains are added to the peaks the
      *   preamp must make room for; its negative preamp is folded in by the caller.
+     * @param dynamicBoostEffectValue the Dynamic Boost control value, whose make-up gain is
+     *   part of the chain and therefore part of the headroom requirement.
      */
     fun calculateHeadroomCompensationDb(
         bassEffectValue: Float,
         eqGains: List<Float>,
         clarityEffectValue: Float = 5.0f,
-        headphonePlan: com.fxsound.audio.opra.HeadphoneEqPlan? = null
+        headphonePlan: com.fxsound.audio.opra.HeadphoneEqPlan? = null,
+        dynamicBoostEffectValue: Float = 0.0f
     ): Float {
         val bassBandGains = FxSoundResponseTables.bassBandGainsDb(bassEffectValue)
         val clarityBandGains = FxSoundResponseTables.fidelityBandGainsDb(clarityEffectValue)
@@ -271,8 +288,10 @@ object DynamicsProcessingTranslator {
         // While the headphone plan is active, the FxSound bass contour is skipped (the plan
         // is the single low-frequency stage), so its peak must not be counted twice.
         val bassPeakDb = bassBandGains.max().takeIf { headphonePlan == null } ?: 0.0f
-        val totalPeakPotential = max(maxPositiveEqBoost, bassPeakDb) + (positiveGainSum * 0.08f)
-        return (totalPeakPotential * 0.35f).coerceIn(0.0f, 6.0f)
+        val mbcMakeUpDb = FxSoundResponseTables.dynamicMakeUpDb(dynamicBoostEffectValue)
+        val totalPeakPotential =
+            max(maxPositiveEqBoost, bassPeakDb) + (positiveGainSum * 0.08f) + mbcMakeUpDb
+        return totalPeakPotential.coerceIn(0.0f, 24.0f)
     }
 
     /**

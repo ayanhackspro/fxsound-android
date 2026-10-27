@@ -29,11 +29,11 @@ audio HAL, the engine falls back to the platform `Equalizer` plus a standalone `
 
 | Stage | Range | Source |
 | :--- | :--- | :--- |
-| Input gain | -12 dB to +6 dB | `masterGainDb` minus the headroom compensation |
-| Pre-EQ bass contour | 0 to +8.5 dB (64 Hz), 0.75x that at 125 Hz, 0.40x at 250 Hz | `DynamicsProcessingTranslator.HYPERBASS_MAX_DB` |
-| Multi-band compressor make-up | 0 to +4 dB | `dynamicBoost` |
+| Input gain | -24 dB to +6 dB | `masterGainDb` minus the headroom compensation |
+| Pre-EQ bass contour | 0 to +9.4 dB (measured, peaking at 125 Hz) | `FxSoundResponseTables.bassBandGainsDb` |
+| Multi-band compressor make-up | 0 to +11.8 dB | `FxSoundResponseTables.dynamicMakeUpDb` |
 | Post-EQ user band gain | -14 dB to +14 dB per band | the 10-band EQ |
-| Post-EQ clarity contribution | +1.5 dB at 1 kHz rising to +6.5 dB at 16 kHz | `clarity` |
+| Post-EQ clarity contribution | 0 to +9.4 dB at 16 kHz (measured shelf with a mid scoop) | `FxSoundResponseTables.fidelityBandGainsDb` |
 
 ### Headroom compensation
 
@@ -41,16 +41,35 @@ audio HAL, the engine falls back to the platform `Equalizer` plus a standalone `
 attenuation:
 
 ```
-bassPeakDb           = the measured Pre-EQ bass contour, peaking at +9.4 dB on the 125 Hz band
-totalPeakPotential   = max(maxPositiveEqBoost, bassPeakDb) + (sumOfPositiveEqBoosts * 0.08)
-headroomCompensation = clamp(totalPeakPotential * 0.35, 0 dB, 6 dB)
-finalInputGain       = clamp(masterGainDb - headroomCompensation, -12 dB, +6 dB)
+bassPeakDb           = the measured Pre-EQ bass contour (up to +9.4 dB)
+maxEqBoostDb         = the largest positive Post-EQ band (user EQ + clarity)
+sumOfPositiveEqBoosts = the sum of the positive Post-EQ bands
+mbcMakeUpDb          = the measured make-up gain of the maximiser
+totalPeakPotential   = max(maxEqBoostDb, bassPeakDb) + (sumOfPositiveEqBoosts * 0.08) + mbcMakeUpDb
+headroomCompensation = clamp(totalPeakPotential, 0 dB, 24 dB)
+finalInputGain       = clamp(masterGainDb - headroomCompensation + planPreamp, -24 dB, +6 dB)
 ```
 
-"PositiveEqBoosts" includes the clarity contribution, because it lives in the Post-EQ and is
-part of the peak the preamp has to make room for. The headroom allowance is capped at 6 dB,
-which is the largest attenuation the input-gain stage can apply without the chain losing too
-much level.
+The compensation is deliberately **full**, not proportional. An earlier version applied
+only 35 % of the peak and capped the result at 6 dB, which left the limiter doing the level
+control: a fixed boost pushed loud material into gain reduction and did nothing to quiet
+material, so the same slider setting sounded strong at low volume and nearly inaudible at
+high volume. Compensating every static gain before the limiter (including the maximiser's
+make-up, which sits between the two EQs) makes the chain level-independent. Positive EQ
+contributions include clarity, because it lives in the Post-EQ.
+
+The 24 dB cap is the DynamicsProcessing input-gain floor; asking for more would silently
+stop being applied. The cap is also why the extreme combined settings still rely on the
+limiter for the residual.
+
+### Equalizer fallback path
+
+The platform `Equalizer` fallback has no input gain and no limiter. Rather than leave a
+positive boost to clip at high volume, `applyEqualizerBands()` subtracts the largest positive
+band gain from **every** band before writing the levels. The relative curve (the audible EQ
+shape) is preserved, but the boost no longer adds peak gain. This is the same
+level-independence goal as the preamp, implemented as a band-level offset because this path
+has no preamp stage.
 
 ### Measured Dynamic Boost
 
@@ -88,10 +107,10 @@ Configured in `DynamicsProcessingTranslator.LimiterSpec`:
 
 | Parameter | Value | Note |
 | :--- | :--- | :--- |
-| Attack | 1.0 ms | Fast enough to catch a bass transient without being clicky. |
-| Release | 120 ms | Studio mastering time constant. A faster release makes the whole broadband mix pump on every bass hit. |
-| Ratio | 20:1 | A firm limiter rather than a true brickwall. |
-| Threshold | -0.2 dBFS | Leaves a small cushion against inter-sample overs. |
+| Attack | 5.0 ms | Catches a peak without clamping on every transient. |
+| Release | 250 ms | Long enough that a bass hit does not duck the whole broadband mix. |
+| Ratio | 6:1 | A safety net, not a brickwall; with full headroom it should rarely engage. |
+| Threshold | -1.0 dBFS | Leaves a cushion against inter-sample overs. |
 | Post gain | 0 dB | The master gain is applied once, at the input. Applying it here as well would square it. |
 
 ### Limitations
@@ -100,12 +119,12 @@ These are properties of the platform effect, not of this project, and they are s
 because the design spec requires them to be documented.
 
 - **Lookahead: none.** The platform `DynamicsProcessing` limiter has no lookahead. It cannot
-  anticipate a peak, so it catches the overs by acting on it. The 1 ms attack is the shortest
-  the platform exposes, and even that is longer than the interval between the peak and the
-  start of the distortion it is correcting.
+  anticipate a peak, so it catches the overs by acting on it. The 5 ms attack is a deliberate
+  compromise: faster attacks clamp on every transient, slower ones let the peak through. The
+  full preamp compensation is what keeps the limiter out of the way most of the time.
 - **True peak: not measured.** The limiter works on the sample stream, not on the
   inter-sample peak. A signal that peaks below 0 dBFS between two samples can still exceed
-  0 dBFS after the DAC's reconstruction filter. The -0.2 dBFS threshold is a cushion against
+  0 dBFS after the DAC's reconstruction filter. The -1.0 dBFS threshold is a cushion against
   that, not a guarantee.
 - **Bandwidth: the whole mix.** The limiter is a single broadband stage. Any gain reduction it
   applies is applied to every band, so a bass transient ducks the vocals and the cymbals with

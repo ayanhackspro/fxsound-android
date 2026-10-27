@@ -203,7 +203,9 @@ data class FxSoundUiState(
     /** Transient: true only after the companion service confirms the DSP attach. */
     val isHeadphonePlanApplied: Boolean = false,
     /** Transient: which renderer actually carries the EQ, and how many bands it exposes. */
-    val eqRenderer: EqRendererInfo = EqRendererInfo()
+    val eqRenderer: EqRendererInfo = EqRendererInfo(),
+    /** Transient: which optional DSP stages the companion service could really attach. */
+    val stageReport: FxStageReport = FxStageReport()
 )
 
 /** Which equalizer stage the companion service actually attached to the live session. */
@@ -230,6 +232,62 @@ data class EqRendererInfo(
  */
 fun FxSoundUiState.withHeadphoneAttachResult(success: Boolean): FxSoundUiState =
     if (isHeadphonePlanApplied == success) this else copy(isHeadphonePlanApplied = success)
+
+/**
+ * What the companion service was able to attach for one optional DSP stage.
+ *
+ * This exists because "the slider moved" is not evidence that the effect is running.
+ * Android's `BassBoost` and `Virtualizer` are optional effects: a device (or a given
+ * output route) may reject them outright, and `Virtualizer` may exist but not expose
+ * adjustable strength. Reporting that honestly is better than showing an enabled control
+ * that has no audio behind it.
+ */
+enum class StageState {
+    /** The service has not reported yet (e.g. it is not running). */
+    UNKNOWN,
+    /** The effect instance is attached and its controls apply. */
+    ACTIVE,
+    /** Attached, but the platform does not expose the control the UI drives. */
+    FIXED,
+    /** Attached but deliberately disabled, because another stage already owns that role. */
+    BYPASSED,
+    /** The platform refused to create the effect on this session. */
+    UNSUPPORTED,
+    /** The effect existed but a parameter update was rejected. */
+    FAILED
+}
+
+/**
+ * Per-stage attach report for the session the UI is currently driving.
+ * [eq] duplicates [EqRendererInfo] only at the level of "is there a live EQ".
+ */
+data class FxStageReport(
+    val eq: StageState = StageState.UNKNOWN,
+    val bassBoost: StageState = StageState.UNKNOWN,
+    val virtualizer: StageState = StageState.UNKNOWN,
+    /** False when the platform's Virtualizer reports that strength is not adjustable. */
+    val virtualizerStrengthSupported: Boolean = false
+) {
+    /**
+     * The Surround slider is only allowed to move when moving it can change the audio.
+     * UNKNOWN is treated as usable so the control still works before the service reports.
+     */
+    val isSurroundAdjustable: Boolean
+        get() = virtualizer == StageState.UNKNOWN || virtualizer == StageState.ACTIVE
+
+    /** Human-readable reason to show next to a disabled Surround control. */
+    fun virtualizerUnavailableReason(): String? = when (virtualizer) {
+        StageState.FIXED ->
+            "This device's virtualizer has a fixed strength, so the Surround control cannot change it."
+        StageState.UNSUPPORTED ->
+            "This device/audio route does not provide a Virtualizer effect, so Surround is unavailable."
+        StageState.FAILED ->
+            "The Virtualizer effect stopped accepting updates, so Surround is unavailable."
+        StageState.BYPASSED ->
+            "Surround is not applied on the current audio route."
+        StageState.UNKNOWN, StageState.ACTIVE -> null
+    }
+}
 
 enum class LatencyMode {
     STUDIO,       // High-fidelity standard buffer (1024-2048 frames) with maximum DSP resolution

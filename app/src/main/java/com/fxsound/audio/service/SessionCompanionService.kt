@@ -33,7 +33,9 @@ import com.fxsound.audio.model.EqRendererKind
 import com.fxsound.audio.model.FxSoundEffectId
 import com.fxsound.audio.model.FxSoundPreset
 import com.fxsound.audio.model.FxSoundUiState
+import com.fxsound.audio.model.FxStageReport
 import com.fxsound.audio.model.RouteStatus
+import com.fxsound.audio.model.StageState
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -94,6 +96,11 @@ class SessionCompanionService : Service() {
         var usesPreEqHyperBass: Boolean = false,
         /** Band count currenly configured in the live Pre-EQ; a change forces effect recreation. */
         var preEqBandCount: Int = 10,
+        /** What actually attached on this session, for honest UI reporting. */
+        var eqStage: StageState = StageState.UNKNOWN,
+        var bassStage: StageState = StageState.UNKNOWN,
+        var virtualizerStage: StageState = StageState.UNKNOWN,
+        var virtualizerStrengthSupported: Boolean = false,
         var lastActiveTimeMs: Long = System.currentTimeMillis()
     )
 
@@ -318,6 +325,10 @@ class SessionCompanionService : Service() {
         Log.i(TAG, "Attaching FxSound pipeline to Global Audio Session 0 (System Mix)...")
         val state = FxSoundRepository.uiState.value
         val session = ActiveSession(0, "System Audio")
+        // The global mix is only a fallback for apps whose audio does not route through an
+        // explicit session. When one exists, session 0 stays attached but disabled so the
+        // same audio can never pass through two chains (ADR-030).
+        val onlyGlobalChain = activeSessions.keys.none { it != 0 }
 
         // 1. DynamicsProcessing on Session 0 (Multi-band compressor, pre/post EQ, peak limiter)
         try {
@@ -329,9 +340,10 @@ class SessionCompanionService : Service() {
                 headphonePlan = state.headphonePlan
             )
             val dp = DynamicsProcessing(0, 0, config).apply {
-                enabled = state.isPowerOn
+                enabled = state.isPowerOn && onlyGlobalChain
             }
             session.dynamicsProcessing = dp
+            session.eqStage = StageState.ACTIVE
             session.usesPreEqHyperBass = state.headphonePlan == null
             session.preEqBandCount = state.headphonePlan?.bands?.size ?: 10
             FxSoundRepository.onHeadphoneAttachResult(true)
@@ -341,11 +353,13 @@ class SessionCompanionService : Service() {
             try {
                 val eq = Equalizer(0, 0).apply {
                     applyEqualizerBands(this, state.eqGains, state.effects[FxSoundEffectId.FIDELITY] ?: 5.0f)
-                    enabled = state.isPowerOn
+                    enabled = state.isPowerOn && onlyGlobalChain
                 }
                 session.equalizer = eq
+                session.eqStage = StageState.ACTIVE
                 Log.i(TAG, "Standard Equalizer attached to Session 0 successfully.")
             } catch (eqEx: Exception) {
+                session.eqStage = StageState.UNSUPPORTED
                 Log.w(TAG, "Standard Equalizer also unavailable on Session 0: ${eqEx.message}")
             }
         }
@@ -359,34 +373,28 @@ class SessionCompanionService : Service() {
             headphonePlanActive = state.headphonePlan != null
         )
         session.usesPreEqHyperBass = bassStrategy.usesPreEqHyperBass
-        if (bassStrategy.standaloneBassBoostStrength > 0) {
+        if (session.dynamicsProcessing == null && state.headphonePlan == null) {
             try {
                 val bass = BassBoost(0, 0).apply {
                     setStrength(bassStrategy.standaloneBassBoostStrength)
-                    enabled = state.isPowerOn
+                    enabled = state.isPowerOn && onlyGlobalChain
                 }
                 session.bassBoost = bass
+                session.bassStage = StageState.ACTIVE
             } catch (e: Exception) {
+                session.bassStage = StageState.UNSUPPORTED
                 Log.w(TAG, "BassBoost on Session 0 failed: ${e.message}")
             }
+        } else {
+            session.bassStage = StageState.BYPASSED
         }
 
         // 3. Virtualizer on Session 0
-        try {
-            val virt = Virtualizer(0, 0).apply {
-                val strength = DynamicsProcessingTranslator.translateVirtualizer(
-                    state.effects[FxSoundEffectId.SURROUND] ?: 3.0f
-                )
-                setStrength(strength)
-                enabled = state.isPowerOn
-            }
-            session.virtualizer = virt
-        } catch (e: Exception) {
-            Log.w(TAG, "Virtualizer on Session 0 failed: ${e.message}")
-        }
+        session.virtualizer = attachVirtualizer(session, state, state.isPowerOn && onlyGlobalChain)
 
         activeSessions[0] = session
         reportEqRenderer(session)
+        reportStages()
     }
 
     private fun applyEqualizerBands(eq: Equalizer, eqGains: List<Float>, clarity: Float) {
@@ -395,6 +403,7 @@ class SessionCompanionService : Service() {
         val maxLevel = eq.bandLevelRange[1] // millibels
         val clarityNorm = (clarity / 10.0f).coerceIn(0.0f, 1.0f)
 
+        val gainsDb = FloatArray(numBands)
         for (band in 0 until numBands) {
             val centerFreqHz = eq.getCenterFreq(band.toShort()) / 1000 // mHz to Hz
             val userGain = PlatformEqMapper.gainAt(centerFreqHz, eqGains)
@@ -405,8 +414,19 @@ class SessionCompanionService : Service() {
                 clarityNorm * 10.0f,
                 centerFreqHz.toFloat()
             )
-            val totalDb = (userGain + clarityBoost).coerceIn(-14.0f, 14.0f)
-            val millibels = PlatformEqMapper.millibels(totalDb, minLevel, maxLevel)
+            gainsDb[band] = (userGain + clarityBoost).coerceIn(-14.0f, 14.0f)
+        }
+
+        // This path has no preamp or limiter, so a positive boost that survives to the
+        // output clips at high volume — the same level-dependence as the DynamicsProcessing
+        // chain, but with no headroom control at all. Subtracting the largest boost from
+        // every band keeps the relative curve (the audible EQ shape) while preventing the
+        // boost from adding peak gain. A flatter, quieter result is honest; a clipping
+        // "louder" result is not.
+        val peakBoostDb = gainsDb.maxOrNull()?.coerceAtLeast(0.0f) ?: 0.0f
+        for (band in 0 until numBands) {
+            val levelDb = gainsDb[band] - peakBoostDb
+            val millibels = PlatformEqMapper.millibels(levelDb, minLevel, maxLevel)
             eq.setBandLevel(band.toShort(), millibels)
         }
     }
@@ -431,6 +451,7 @@ class SessionCompanionService : Service() {
                     enabled = state.isPowerOn
                 }
                 session.dynamicsProcessing = dp
+                session.eqStage = StageState.ACTIVE
                 session.preEqBandCount = state.headphonePlan?.bands?.size ?: 10
                 if (state.headphonePlan != null) FxSoundRepository.onHeadphoneAttachResult(true)
             } catch (dpEx: Exception) {
@@ -441,7 +462,9 @@ class SessionCompanionService : Service() {
                         enabled = state.isPowerOn
                     }
                     session.equalizer = eq
+                    session.eqStage = StageState.ACTIVE
                 } catch (eqEx: Exception) {
+                    session.eqStage = StageState.UNSUPPORTED
                     Log.w(TAG, "Equalizer also failed on session $sessionId: ${eqEx.message}")
                 }
             }
@@ -450,34 +473,28 @@ class SessionCompanionService : Service() {
             // Pre-EQ HyperBass contour and the standalone boost never run in series.
             val bassStrategy = DynamicsProcessingTranslator.resolveBassStrategy(
                 hasDynamicsProcessing = session.dynamicsProcessing != null,
-                bassEffectValue = state.effects[FxSoundEffectId.BASS] ?: 4.0f
+                bassEffectValue = state.effects[FxSoundEffectId.BASS] ?: 4.0f,
+                headphonePlanActive = state.headphonePlan != null
             )
             session.usesPreEqHyperBass = bassStrategy.usesPreEqHyperBass
-            if (bassStrategy.standaloneBassBoostStrength > 0) {
+            if (session.dynamicsProcessing == null && state.headphonePlan == null) {
                 try {
                     val bass = BassBoost(0, sessionId).apply {
                         setStrength(bassStrategy.standaloneBassBoostStrength)
                         enabled = state.isPowerOn
                     }
                     session.bassBoost = bass
+                    session.bassStage = StageState.ACTIVE
                 } catch (e: Exception) {
+                    session.bassStage = StageState.UNSUPPORTED
                     Log.w(TAG, "BassBoost failed on session $sessionId: ${e.message}")
                 }
+            } else {
+                session.bassStage = StageState.BYPASSED
             }
 
             // 3. Virtualizer (3D Surround soundstage widening)
-            try {
-                val virt = Virtualizer(0, sessionId).apply {
-                    val strength = DynamicsProcessingTranslator.translateVirtualizer(
-                        state.effects[FxSoundEffectId.SURROUND] ?: 3.0f
-                    )
-                    setStrength(strength)
-                    enabled = state.isPowerOn
-                }
-                session.virtualizer = virt
-            } catch (e: Exception) {
-                Log.w(TAG, "Virtualizer failed on session $sessionId: ${e.message}")
-            }
+            session.virtualizer = attachVirtualizer(session, state)
 
             // 4. PresetReverb is intentionally not attached. It is an auxiliary effect: the
             // source track must create the aux send, which an app cannot do on another app's
@@ -487,6 +504,7 @@ class SessionCompanionService : Service() {
 
             activeSessions[sessionId] = session
             reportEqRenderer(session)
+            reportStages()
             // Determine route status
             val routeStatus = if (packageName?.contains("spotify", ignoreCase = true) == true) {
                 RouteStatus.CONNECTED_SPOTIFY
@@ -496,6 +514,10 @@ class SessionCompanionService : Service() {
 
             FxSoundRepository.setRouteStatus(routeStatus, packageName, sessionId)
             updateNotification(routeStatus, packageName)
+
+            // Enforce the single-chain rule now that an explicit session exists: session 0
+            // stays attached but is disabled so the audio is not processed twice.
+            enforceSingleChain()
 
         } catch (e: Exception) {
             Log.e(TAG, "Failed to attach audio effects to session $sessionId: ${e.message}", e)
@@ -531,6 +553,9 @@ class SessionCompanionService : Service() {
             FxSoundRepository.setRouteStatus(fallbackStatus, fallbackPkg, 0)
             updateNotification(fallbackStatus, fallbackPkg)
         }
+        // Re-arm the remaining chain: if that was the last explicit session, the global mix
+        // becomes the processing session again.
+        enforceSingleChain()
     }
 
     /** Re-creates the DynamicsProcessing effect on a live session with a fresh config. */
@@ -547,14 +572,37 @@ class SessionCompanionService : Service() {
             session.dynamicsProcessing = dp
             session.usesPreEqHyperBass = state.headphonePlan == null
             session.preEqBandCount = state.headphonePlan?.bands?.size ?: 10
+            session.eqStage = StageState.ACTIVE
             Log.i(TAG, "DynamicsProcessing recreated on session ${session.sessionId} (Pre-EQ band count changed).")
             true
         } catch (e: Exception) {
             Log.w(TAG, "DynamicsProcessing recreation failed on session ${session.sessionId}: ${e.message}")
             // The previous instance was already released; never leave a released effect in use.
             session.dynamicsProcessing = null
+            session.eqStage = StageState.FAILED
             FxSoundRepository.onHeadphoneAttachResult(false)
             false
+        }
+    }
+
+    /**
+     * Enforces "exactly one processing chain" without rebuilding any configs.
+     *
+     * Attaching an explicit session must silence the global mix, and closing the last
+     * explicit session must re-arm it. Only the `enabled` flags change here; the configs are
+     * already current because every session is updated from the same state snapshot.
+     */
+    private fun enforceSingleChain() {
+        val hasExplicitSessions = activeSessions.keys.any { it != 0 }
+        val powerOn = FxSoundRepository.uiState.value.isPowerOn
+        for ((id, session) in activeSessions) {
+            val chainEnabled = powerOn && (id != 0 || !hasExplicitSessions)
+            session.dynamicsProcessing?.enabled = chainEnabled
+            session.equalizer?.enabled = chainEnabled
+            session.bassBoost?.enabled =
+                chainEnabled && !session.usesPreEqHyperBass
+            session.virtualizer?.enabled =
+                chainEnabled && session.virtualizerStrengthSupported
         }
     }
 
@@ -572,7 +620,21 @@ class SessionCompanionService : Service() {
         )
         val clarity = state.effects[FxSoundEffectId.FIDELITY] ?: 5.0f
 
+        // Single processing chain (ADR-030): when any explicit app session is live, the
+        // global mix stage must be silent. Otherwise the same audio can pass through both
+        // chains, doubling every static boost and every limiter.
+        val hasExplicitSessions = activeSessions.keys.any { it != 0 }
+        if (hasExplicitSessions) {
+            activeSessions[0]?.let { global ->
+                global.dynamicsProcessing?.enabled = false
+                global.equalizer?.enabled = false
+                global.bassBoost?.enabled = false
+                global.virtualizer?.enabled = false
+            }
+        }
+
         for ((id, session) in activeSessions) {
+            val processThisSession = id != 0 || !hasExplicitSessions
             // 1. DynamicsProcessing (Pre-EQ, MBC, Post-EQ, Limiter)
             // If the OPRA plan changed the Pre-EQ band count, the live effect must be
             // recreated — stage setters reject a band-count mismatch.
@@ -594,9 +656,10 @@ class SessionCompanionService : Service() {
                         // Fallback to monolithic channel copy if stage setters encounter OEM HAL restrictions
                         setAllChannelsTo(config.getChannelByChannelIndex(0))
                     }
-                    enabled = state.isPowerOn
+                    enabled = state.isPowerOn && processThisSession
                 }
             } catch (e: Exception) {
+                session.eqStage = StageState.FAILED
                 Log.w(TAG, "Failed updating DynamicsProcessing on session $id: ${e.message}")
             }
 
@@ -604,9 +667,10 @@ class SessionCompanionService : Service() {
             try {
                 session.equalizer?.apply {
                     applyEqualizerBands(this, state.eqGains, clarity)
-                    enabled = state.isPowerOn
+                    enabled = state.isPowerOn && processThisSession
                 }
             } catch (e: Exception) {
+                session.eqStage = StageState.FAILED
                 Log.w(TAG, "Failed updating Equalizer on session $id: ${e.message}")
             }
 
@@ -621,22 +685,38 @@ class SessionCompanionService : Service() {
                         headphonePlanActive = state.headphonePlan != null
                     )
                     setStrength(strategy.standaloneBassBoostStrength)
-                    enabled = state.isPowerOn && !strategy.usesPreEqHyperBass
+                    enabled = state.isPowerOn && !strategy.usesPreEqHyperBass && processThisSession
+                    session.bassStage = if (strategy.usesPreEqHyperBass ||
+                        strategy.standaloneBassBoostStrength == 0.toShort()
+                    ) {
+                        StageState.BYPASSED
+                    } else {
+                        StageState.ACTIVE
+                    }
                 }
             } catch (e: Exception) {
+                session.bassStage = StageState.FAILED
                 Log.w(TAG, "Failed updating BassBoost on session $id: ${e.message}")
             }
 
             // 4. Virtualizer (3D Surround soundstage widening)
             try {
                 session.virtualizer?.apply {
-                    setStrength(virtStrength)
-                    enabled = state.isPowerOn
+                    if (session.virtualizerStrengthSupported) {
+                        setStrength(virtStrength)
+                        enabled = state.isPowerOn && processThisSession
+                        session.virtualizerStage = StageState.ACTIVE
+                    } else {
+                        enabled = false
+                        session.virtualizerStage = StageState.FIXED
+                    }
                 }
             } catch (e: Exception) {
+                session.virtualizerStage = StageState.FAILED
                 Log.w(TAG, "Failed updating Virtualizer on session $id: ${e.message}")
             }
         }
+        reportStages()
     }
 
     private fun releaseSessionEffects(session: ActiveSession) {
@@ -656,6 +736,11 @@ class SessionCompanionService : Service() {
             session.virtualizer?.enabled = false
             session.virtualizer?.release()
             session.virtualizer = null
+
+            session.eqStage = StageState.UNKNOWN
+            session.bassStage = StageState.UNKNOWN
+            session.virtualizerStage = StageState.UNKNOWN
+            session.virtualizerStrengthSupported = false
         } catch (e: Exception) {
             Log.w(TAG, "Error releasing session effects: ${e.message}")
         }
@@ -674,6 +759,65 @@ class SessionCompanionService : Service() {
                 0
             )
         )
+        FxSoundRepository.setStageReport(FxStageReport())
+    }
+
+    /**
+     * Creates the Virtualizer for a session and records what the platform really allows.
+     *
+     * `strengthSupported` is checked before the control is claimed to work: Virtualizer is
+     * an optional effect, and many devices either reject it on a given session or expose a
+     * fixed (non-adjustable) strength. In both cases the Surround slider must show why it
+     * cannot do anything instead of looking alive.
+     */
+    private fun attachVirtualizer(
+        session: ActiveSession,
+        state: FxSoundUiState,
+        enabled: Boolean = state.isPowerOn
+    ): Virtualizer? {
+        val sessionId = session.sessionId
+        return try {
+            val virt = Virtualizer(0, sessionId)
+            val strengthSupported = runCatching { virt.strengthSupported }.getOrDefault(false)
+            session.virtualizerStrengthSupported = strengthSupported
+            if (strengthSupported) {
+                virt.setStrength(
+                    DynamicsProcessingTranslator.translateVirtualizer(
+                        state.effects[FxSoundEffectId.SURROUND] ?: 3.0f
+                    )
+                )
+            }
+            // A fixed-strength virtualizer is left disabled: enabling it would change the
+            // sound through a control the user cannot adjust, which is worse than honest off.
+            virt.enabled = enabled && strengthSupported
+            session.virtualizerStage = if (strengthSupported) StageState.ACTIVE else StageState.FIXED
+            Log.i(TAG, "Virtualizer attached to session $sessionId (strengthSupported=$strengthSupported).")
+            virt
+        } catch (e: Exception) {
+            session.virtualizerStage = StageState.UNSUPPORTED
+            session.virtualizerStrengthSupported = false
+            Log.w(TAG, "Virtualizer failed on session $sessionId: ${e.message}")
+            null
+        }
+    }
+
+    /**
+     * Publishes the attach report for the session the console is actually driving: the
+     * foreground app's explicit session when there is one, otherwise the global mix.
+     */
+    private fun reportStages() {
+        val session = activeSessions.values.firstOrNull { it.sessionId != 0 } ?: activeSessions[0]
+        val report = if (session == null) {
+            FxStageReport()
+        } else {
+            FxStageReport(
+                eq = session.eqStage,
+                bassBoost = session.bassStage,
+                virtualizer = session.virtualizerStage,
+                virtualizerStrengthSupported = session.virtualizerStrengthSupported
+            )
+        }
+        FxSoundRepository.setStageReport(report)
     }
 
     /**

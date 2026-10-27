@@ -1101,3 +1101,63 @@ the platform band bandwidth. Nothing in this pass validates the audible result o
   None means no session is attached at all. Note also that Bluetooth codecs low-pass the
   source (SBC around 17 kHz, many AAC paths around 16 kHz), so a 16 kHz boost can be
   physically inaudible on a wireless headset even when the DSP applies it correctly.
+
+### 2026-10-28 - One DSP Chain, Full Headroom, Honest Stage Reporting
+
+- **User report:** audio turned choppy at higher volume, and the Home "Clarity" and "Surround"
+  controls moved but had no audible effect. The emulator UI check showed the sliders were
+  wired correctly, so the fault had to be in the audio path or in an effect that never
+  attached. Four defects were found in code; all four are fixed here.
+- **1. Two chains processed the same audio.** Session 0 (global mix) and every explicit app
+  session were attached and enabled at the same time, and `updateAllActiveSessions()` wrote
+  the same config to all of them. Default settings therefore produced roughly +9 dB per chain
+  (bass + make-up + clarity) with two 20:1 limiters. The service now keeps exactly one chain
+  enabled: opening an explicit session calls `enforceSingleChain()` and disables session 0,
+  closing the last explicit session re-enables it. Session 0 stays attached (so it does not
+  need recreating) but processes nothing while an app session is live.
+- **2. Headroom was a 0.35 fraction capped at 6 dB.** A static boost pushed loud material
+  into the limiter and did nothing to quiet material, which is why the same setting sounded
+  strong at low volume and nearly inaudible at high volume. `calculateHeadroomCompensationDb`
+  now compensates the full peak potential: the larger of the bass Pre-EQ peak and the highest
+  Post-EQ band, 8 % of the summed positive bands, and the maximiser's measured make-up gain,
+  clamped to 0..24 dB (the input-gain floor). The limiter is now a safety net: 6:1, 5 ms
+  attack, 250 ms release, -1.0 dBFS.
+- **3. The platform-EQ fallback added gain it could not compensate.** It has no preamp and no
+  limiter, so `applyEqualizerBands()` now subtracts the largest positive band gain from every
+  band. The relative curve is unchanged; the added peak gain is gone, so it cannot clip at
+  high volume.
+- **4. Optional stages were assumed to be live.** New `FxStageReport(eq, bassBoost,
+  virtualizer)` with `StageState.{UNKNOWN, ACTIVE, FIXED, BYPASSED, UNSUPPORTED, FAILED}` is
+  reported by `SessionCompanionService` and shown in Settings -> Audio Engine Diagnostics.
+  `Virtualizer.strengthSupported` is checked: a fixed-strength virtualizer is reported FIXED
+  and left disabled, so the Surround slider cannot pretend to work. The Home Surround slider
+  is disabled with a reason when the Virtualizer is unavailable; Bass is disabled with a
+  reason when the standalone BassBoost is unavailable. The fallback path now creates the
+  BassBoost even at strength 0, so raising the slider from 0 works instead of finding no
+  effect instance.
+- **Files changed:** service/SessionCompanionService.kt (stage fields, `attachVirtualizer`,
+  `reportStages`, `enforceSingleChain`, fallback band offset, single-chain enable logic),
+  engine/DynamicsProcessingTranslator.kt (headroom formula, MBC make-up argument, limiter
+  calibration), model/FxSoundModel.kt (`StageState`, `FxStageReport`), data/FxSoundRepository.kt
+  (`setStageReport`, no echo), ui/screens/HomeScreen.kt (Surround/Bass gating and notes),
+  ui/screens/SettingsScreen.kt (stage rows and labels), test/.../DynamicsProcessingTranslatorTest.kt
+  (new ranges, maximiser headroom, softened-limiter test), test/.../FxStageReportTest.kt (new),
+  docs/GAIN_STAGING_AND_LIMITER.md and docs/DECISIONS.md (ADR-030).
+- **Commands run and actual results:**
+  - `.\gradlew.bat testDebugUnitTest assembleDebug assembleRelease --no-daemon`: BUILD
+    SUCCESSFUL. 92 tests, 0 failures, 1 skipped (`OpraDatasetSmokeTest`, needs the full dump).
+  - APKs: `app/build/outputs/apk/debug/app-debug.apk` = 30,274,092 bytes;
+    `app/build/outputs/apk/release/app-release.apk` = 3,932,746 bytes.
+  - Emulator Medium_Phone_API_37.0 (1080x2400, 420 dpi), debug installed: Home shows the
+    Surround row with "This device/audio route does not provide a Virtualizer effect, so
+    Surround is unavailable." and its SeekBar reports `enabled="false"`. Settings ->
+    Audio Engine Diagnostics shows `Bass Boost Stage: Unsupported by device`,
+    `Virtualizer Stage: Unsupported by device/route`, `EQ Renderer: None (no session
+    attached)` and `Peak Limiter: 6:1 @ -1.0 dBFS`. That is the honest state for a device
+    whose HAL rejects every platform effect with `Error: -3`.
+- **Not verified:** audibility, absence of pumping, and the single-chain behaviour with a real
+  player. The emulator has no audio output and the Xiaomi 17 was not connected, so no claim is
+  made that the choppy-at-volume symptom is gone on the target device. On a real device the
+  first things to read are the two new stage rows (both should say Attached when the HAL
+  supports them) and the EQ Renderer row; then compare a fixed music passage at several
+  volume steps, level-matched, before and after.

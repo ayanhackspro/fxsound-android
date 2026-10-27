@@ -52,6 +52,7 @@ import com.fxsound.audio.model.FxSoundUiState
 import com.fxsound.audio.model.HapticsMode
 import com.fxsound.audio.model.LatencyMode
 import com.fxsound.audio.model.RouteStatus
+import com.fxsound.audio.model.StageState
 import com.fxsound.audio.nativebridge.FxSoundNativeBridge
 import com.fxsound.audio.ui.theme.BorderSubtle
 import com.fxsound.audio.ui.theme.DarkBackground
@@ -354,6 +355,8 @@ fun SettingsScreen(
                 DiagnosticRow("Active Package", state.activePackageName ?: "None (Awaiting Session)")
                 DiagnosticRow("Session ID", if (state.activeAudioSessionId != 0) state.activeAudioSessionId.toString() else "None")
                 DiagnosticRow("EQ Renderer", eqRendererLabel(state))
+                DiagnosticRow("Bass Boost Stage", bassStageLabel(state))
+                DiagnosticRow("Virtualizer Stage", virtualizerStageLabel(state))
                 if (state.eqRenderer.isBandCollapsed) {
                     Text(
                         text = "This device's system equalizer exposes only " +
@@ -509,3 +512,28 @@ private fun eqRendererLabel(state: FxSoundUiState): String = when (state.eqRende
     EqRendererKind.NONE -> "None (no session attached)"
     EqRendererKind.UNKNOWN -> "Not attached yet"
 }
+
+/** Whether the standalone bass stage attached, or the Pre-EQ is carrying the low end. */
+private fun bassStageLabel(state: FxSoundUiState): String = when (state.stageReport.bassBoost) {
+    StageState.ACTIVE -> "Attached (standalone)"
+    StageState.BYPASSED -> if (state.eqRenderer.kind == EqRendererKind.DYNAMICS_PROCESSING) {
+        "Handled by Pre-EQ"
+    } else {
+        "Bypassed"
+    }
+    StageState.FIXED -> "Fixed strength"
+    StageState.UNSUPPORTED -> "Unsupported by device"
+    StageState.FAILED -> "Update failed"
+    StageState.UNKNOWN -> "Not attached yet"
+}
+
+/** Whether the surround stage attached and whether its strength can actually be changed. */
+private fun virtualizerStageLabel(state: FxSoundUiState): String =
+    when (state.stageReport.virtualizer) {
+        StageState.ACTIVE -> "Attached (strength adjustable)"
+        StageState.FIXED -> "Attached (fixed strength)"
+        StageState.BYPASSED -> "Bypassed"
+        StageState.UNSUPPORTED -> "Unsupported by device/route"
+        StageState.FAILED -> "Update failed"
+        StageState.UNKNOWN -> "Not attached yet"
+    }

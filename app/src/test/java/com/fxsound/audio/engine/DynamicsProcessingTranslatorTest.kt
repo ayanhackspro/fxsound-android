@@ -46,34 +46,54 @@ class DynamicsProcessingTranslatorTest {
         val zeroHeadroom = DynamicsProcessingTranslator.calculateHeadroomCompensationDb(0.0f, flatGains, 0.0f)
         assertEquals(0.0f, zeroHeadroom, 0.001f)
 
-        // Moderate bass (5.0 / 10.0) now follows the measured HyperBass curve, which peaks at
-        // +9.4 dB at 125 Hz rather than the +8.5 dB the old hand-authored curve used.
+        // Moderate bass (5.0 / 10.0) follows the measured HyperBass curve. Full peak
+        // compensation now covers the whole boost instead of a 0.35 fraction.
         val moderateHeadroom =
             DynamicsProcessingTranslator.calculateHeadroomCompensationDb(5.0f, flatGains, 0.0f)
-        assertTrue("Moderate headroom should be between 0.5 and 2.0 dB", moderateHeadroom in 0.5f..2.0f)
+        assertTrue("Moderate headroom should be around 3 dB", moderateHeadroom in 2.0f..4.0f)
 
         val maxBassHeadroom =
             DynamicsProcessingTranslator.calculateHeadroomCompensationDb(10.0f, flatGains, 0.0f)
-        assertTrue("Max bass headroom should be around 3 dB", maxBassHeadroom in 2.0f..4.0f)
+        assertTrue("Max bass headroom should be around 11 dB", maxBassHeadroom in 9.0f..13.0f)
 
         // The clarity contribution lives in the Post-EQ, so it counts towards the peak the
         // preamp has to make room for.
         val clarityHeadroom =
             DynamicsProcessingTranslator.calculateHeadroomCompensationDb(0.0f, flatGains, 10.0f)
-        assertTrue("Clarity must add headroom", clarityHeadroom > 0.5f)
+        assertTrue("Clarity must add headroom", clarityHeadroom > 5.0f)
 
-        // Max bass plus max EQ boost -> safely capped.
+        // Max bass plus max EQ boost -> safely capped at the input-gain floor.
         val extremeBoostGains = List(10) { 14.0f }
         val cappedHeadroom = DynamicsProcessingTranslator.calculateHeadroomCompensationDb(
             10.0f, extremeBoostGains, 10.0f
         )
-        assertEquals(6.0f, cappedHeadroom, 0.001f)
+        assertEquals(24.0f, cappedHeadroom, 0.001f)
 
         // Negative EQ cuts should not produce negative headroom compensation.
         val negativeGains = List(10) { -10.0f }
         val cutHeadroom =
             DynamicsProcessingTranslator.calculateHeadroomCompensationDb(0.0f, negativeGains, 0.0f)
         assertEquals(0.0f, cutHeadroom, 0.001f)
+    }
+
+    @Test
+    fun testMaximiserMakeUpCountsTowardsHeadroom() {
+        val flat = List(10) { 0.0f }
+        val withoutMaximiser =
+            DynamicsProcessingTranslator.calculateHeadroomCompensationDb(0.0f, flat, 0.0f)
+        val withMaximiser = DynamicsProcessingTranslator.calculateHeadroomCompensationDb(
+            0.0f, flat, 0.0f, null, 4.0f
+        )
+        // BALANCED dynamic boost measures +5.87 dB of make-up; it sits between the EQs and
+        // must be compensated or loud material is pushed into the limiter.
+        assertTrue(
+            "Make-up gain must raise the headroom requirement ($withoutMaximiser -> $withMaximiser)",
+            withMaximiser > withoutMaximiser
+        )
+        assertTrue(
+            "The delta should match the measured make-up gain",
+            withMaximiser - withoutMaximiser in 5.0f..6.5f
+        )
     }
 
     @Test
@@ -183,6 +203,29 @@ class DynamicsProcessingTranslatorTest {
         )
     }
 
+    @Test
+    fun testLimiterIsASafetyNetNotALevelControl() {
+        // With full preamp compensation the limiter should rarely engage. A moderate ratio
+        // and a long release keep a lone transient from ducking the mix, which was the
+        // audible "breathing" at high volume.
+        assertTrue(
+            "Ratio must be moderate, not brickwall",
+            DynamicsProcessingTranslator.LimiterSpec.RATIO <= 8.0f
+        )
+        assertTrue(
+            "Attack must be slow enough not to clamp on every transient",
+            DynamicsProcessingTranslator.LimiterSpec.ATTACK_TIME_MS >= 2.0f
+        )
+        assertTrue(
+            "Release must be long enough to avoid pumping",
+            DynamicsProcessingTranslator.LimiterSpec.RELEASE_TIME_MS >= 200.0f
+        )
+        assertTrue(
+            "Threshold must sit below full scale",
+            DynamicsProcessingTranslator.LimiterSpec.THRESHOLD_DBFS <= -1.0f
+        )
+    }
+
     // --- Headroom allocation --------------------------------------------------
 
     @Test
@@ -194,7 +237,7 @@ class DynamicsProcessingTranslatorTest {
 
         assertEquals(0.0f, low, 0.001f)
         assertTrue("Headroom must grow with bass ($mid vs $high)", mid < high)
-        assertTrue("Headroom must stay within the documented 0..6 dB band", high <= 6.0f)
+        assertTrue("Headroom must stay within the documented 0..24 dB band", high <= 24.0f)
     }
 
     // --- OPRA headphone plans (ADR-028) ---------------------------------------
@@ -236,7 +279,7 @@ class DynamicsProcessingTranslatorTest {
             plan(100f to 6f, 3000f to 3f)
         )
         assertTrue("Plan boosts must raise required headroom", boosted > baseline)
-        assertEquals("Headroom must stay capped at 6 dB", true, boosted <= 6.0f)
+        assertEquals("Headroom must stay capped at 24 dB", true, boosted <= 24.0f)
     }
 
     @Test

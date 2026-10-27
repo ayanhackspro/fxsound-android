@@ -43,6 +43,7 @@ import com.fxsound.audio.haptics.HapticsManager
 import com.fxsound.audio.model.FxSoundEffectId
 import com.fxsound.audio.model.FxSoundPreset
 import com.fxsound.audio.model.RouteStatus
+import com.fxsound.audio.model.StageState
 import com.fxsound.audio.ui.components.AcousticMonitorView
 import com.fxsound.audio.ui.components.EffectSlider
 import com.fxsound.audio.ui.components.MasterPowerButton
@@ -326,13 +327,19 @@ fun HomeScreen(
 
 
                 // 3. Surround Sound / 3D Spatial
+                // The surround control only moves when a Virtualizer is really attached and
+                // its strength is adjustable. Many devices expose no Virtualizer on a given
+                // route, or expose a fixed-strength one; a live-looking slider would then be
+                // lying about what the audio is doing.
+                val surroundUsable = state.stageReport.isSurroundAdjustable
                 EffectSlider(
                     name = "Surround Sound",
                     description = "Stereo soundstage widening for expansive acoustic space",
                     value = state.effects[FxSoundEffectId.SURROUND] ?: 3.0f,
                     onValueChange = { FxSoundRepository.setEffect(FxSoundEffectId.SURROUND, it) },
                     hapticsManager = hapticsManager,
-                    enabled = state.isPowerOn
+                    enabled = state.isPowerOn && surroundUsable,
+                    note = state.stageReport.virtualizerUnavailableReason()
                 )
 
                 // 4. Dynamic Boost / Maximizer
@@ -350,6 +357,10 @@ fun HomeScreen(
                 // a profile is active (single-bass rule). The control must show that instead
                 // of pretending to work (B1).
                 val headphonePlanActive = state.headphonePlan != null
+                val bassUnavailable = !headphonePlanActive && (
+                    state.stageReport.bassBoost == StageState.UNSUPPORTED ||
+                        state.stageReport.bassBoost == StageState.FAILED
+                    )
                 EffectSlider(
                     name = "Bass Boost",
                     description = if (headphonePlanActive)
@@ -359,10 +370,14 @@ fun HomeScreen(
                     value = state.effects[FxSoundEffectId.BASS] ?: 4.0f,
                     onValueChange = { FxSoundRepository.setEffect(FxSoundEffectId.BASS, it) },
                     hapticsManager = hapticsManager,
-                    enabled = state.isPowerOn && !headphonePlanActive,
-                    note = if (headphonePlanActive)
-                        "Headphone profile active — this slider is not applied. Remove the profile in the Phones tab to use it."
-                    else null
+                    enabled = state.isPowerOn && !headphonePlanActive && !bassUnavailable,
+                    note = when {
+                        headphonePlanActive ->
+                            "Headphone profile active — this slider is not applied. Remove the profile in the Phones tab to use it."
+                        bassUnavailable ->
+                            "This device/audio route does not provide a BassBoost effect, so this slider is unavailable."
+                        else -> null
+                    }
                 )
             }
         }

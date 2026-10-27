@@ -504,3 +504,46 @@ the audio still depends on the device: the diagnostics row distinguishes "no ses
 "platform equalizer with N bands" and "DynamicsProcessing (10 bands)" instead of implying
 success. Audibility on the Xiaomi 17 remains unverified — and on a Bluetooth route a 16 kHz
 boost can be filtered out by the codec regardless of what the DSP does.
+
+## ADR-030: One Chain, Full Headroom, and Stage-Level Honesty
+
+**Context.** Four reports had a single theme: the app claimed more than the audio path was
+doing. "Choppy at higher volume", "Clarity/Surround move but nothing happens", and a dead
+Surround control after a route change are all consequences of (a) two DSP chains processing
+the same audio, (b) a limiter used as the level control because the preamp compensated only
+35 % of the static boost, and (c) optional effects (`BassBoost`, `Virtualizer`) shown as live
+without checking whether the platform attached them or exposed their controls.
+
+**Decision.**
+
+1. **Exactly one processing chain.** Session 0 (the global mix) and an explicit app session
+   must never both be enabled. `ensureGlobalSessionActive()` attaches session 0 disabled when
+   an explicit session exists; opening an explicit session calls `enforceSingleChain()` and
+   disables the global mix; closing the last explicit session re-enables it. A disabled chain
+   stays attached so a state change does not need to recreate the effect, but it processes
+   nothing. This removes the doubled static gain and the second limiter.
+2. **Headroom is full, not proportional.** The preamp compensates the largest simultaneous
+   EQ/bass boost, a small allowance for summed bands, and the maximiser's measured make-up
+   gain, clamped to the platform's -24 dB input floor. The limiter is then a safety net
+   (6:1, 5 ms attack, 250 ms release, -1 dBFS), not the level control. The earlier 0.35
+   factor is what made a static boost sound level-dependent.
+3. **The fallback path folds its peak into the band levels.** The platform `Equalizer` has no
+   preamp or limiter, so subtracting the largest positive band from every band preserves the
+   relative curve while removing the added peak gain. It cannot clip the boosts at high
+   volume because it never adds gain.
+4. **Every optional stage is reported.** `FxStageReport(eq, bassBoost, virtualizer)` is
+   published by the service with `StageState.{UNKNOWN, ACTIVE, FIXED, BYPASSED, UNSUPPORTED,
+   FAILED}`. The Surround and Bass sliders are disabled with an explanatory note when the
+   corresponding effect could not be attached, or when `Virtualizer.strengthSupported` is
+   false (the platform exposes a fixed-strength virtualizer). A fixed-strength Virtualizer is
+   left disabled rather than changing the sound through a control the user cannot adjust.
+   Settings -> Audio Engine Diagnostics shows the stages.
+
+**Consequences.** With a static boost the chain is now level-independent, at the cost of a
+lower overall output at high boost settings; the volume key (or master gain) is the right
+place to recover level, not the limiter. On devices whose HAL rejects `Virtualizer` or
+`BassBoost` the controls now say so instead of moving silently. On the emulator (all platform
+effects fail with `Error: -3`) the diagnostics read "Unsupported by device" and Surround is
+disabled, which is the honest state. Audibility and the absence of pumping on the Xiaomi 17
+remain unverified until the device is connected; only the code paths, unit tests and the
+emulator UI state have been checked here.

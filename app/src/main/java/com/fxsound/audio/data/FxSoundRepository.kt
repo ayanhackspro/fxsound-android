@@ -7,6 +7,7 @@ import com.fxsound.audio.model.EqRendererInfo
 import com.fxsound.audio.model.FxSoundEffectId
 import com.fxsound.audio.model.FxSoundPreset
 import com.fxsound.audio.model.FxSoundUiState
+import com.fxsound.audio.model.FxStageReport
 import com.fxsound.audio.model.HapticsMode
 import com.fxsound.audio.model.LatencyMode
 import com.fxsound.audio.model.RouteStatus
@@ -286,6 +287,14 @@ object FxSoundRepository {
      */
     fun setEqRenderer(info: EqRendererInfo) {
         _uiState.update { it.copy(eqRenderer = info) }
+    }
+
+    /**
+     * Records which optional DSP stages are really attached. Like [setEqRenderer] this is
+     * reported *by* the service, so it deliberately does not echo state back into it.
+     */
+    fun setStageReport(report: FxStageReport) {
+        _uiState.update { it.copy(stageReport = report) }
     }
 
     /**
