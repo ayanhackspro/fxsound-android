@@ -9,6 +9,8 @@ import com.fxsound.audio.data.FxSoundRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 
 /**
@@ -17,7 +19,7 @@ import kotlinx.coroutines.launch
  */
 class FxSoundTileService : TileService() {
 
-    private val scope = CoroutineScope(Dispatchers.Main)
+    private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private var stateObserverJob: Job? = null
 
     override fun onStartListening() {
@@ -69,5 +71,10 @@ class FxSoundTileService : TileService() {
         }
 
         tile.updateTile()
+    }
+
+    override fun onDestroy() {
+        scope.cancel()
+        super.onDestroy()
     }
 }

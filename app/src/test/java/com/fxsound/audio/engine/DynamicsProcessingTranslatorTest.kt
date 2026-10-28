@@ -292,4 +292,42 @@ class DynamicsProcessingTranslatorTest {
         )
         assertEquals("Cuts must not create headroom compensation", baseline, cut, 0.001f)
     }
+
+    @Test
+    fun testDynamicsTierLabelsAndHierarchy() {
+        val tiers = DynamicsProcessingTranslator.DynamicsTier.values()
+        assertEquals(3, tiers.size)
+        assertEquals(DynamicsProcessingTranslator.DynamicsTier.TIER_1_FULL, tiers[0])
+        assertEquals(DynamicsProcessingTranslator.DynamicsTier.TIER_2_STREAMLINED, tiers[1])
+        assertEquals(DynamicsProcessingTranslator.DynamicsTier.TIER_3_ESSENTIAL, tiers[2])
+
+        assertTrue(tiers[0].label.contains("Tier 1: Full Precision"))
+        assertTrue(tiers[1].label.contains("Tier 2: Streamlined"))
+        assertTrue(tiers[2].label.contains("Tier 3: Essential"))
+    }
+
+    @Test
+    fun testTier3ExcludesMaximiserFromHeadroomCalculation() {
+        val flat = List(10) { 0.0f }
+        val boost = 5.0f
+        val tier1Headroom = DynamicsProcessingTranslator.calculateHeadroomCompensationDb(
+            bassEffectValue = 0.0f,
+            eqGains = flat,
+            clarityEffectValue = 0.0f,
+            headphonePlan = null,
+            dynamicBoostEffectValue = boost
+        )
+        val tier3Headroom = DynamicsProcessingTranslator.calculateHeadroomCompensationDb(
+            bassEffectValue = 0.0f,
+            eqGains = flat,
+            clarityEffectValue = 0.0f,
+            headphonePlan = null,
+            dynamicBoostEffectValue = 0.0f
+        )
+        assertTrue(
+            "Tier 1 (with Maximiser MBC) must require more headroom than Tier 3 (MBC bypassed)",
+            tier1Headroom > tier3Headroom
+        )
+        assertEquals(0.0f, tier3Headroom, 0.001f)
+    }
 }

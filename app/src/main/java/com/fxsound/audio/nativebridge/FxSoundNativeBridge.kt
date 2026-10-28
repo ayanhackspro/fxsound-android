@@ -15,9 +15,9 @@ class FxSoundNativeBridge {
             try {
                 System.loadLibrary("fxsound_dsp")
                 isLibraryLoaded = true
-                Log.i(TAG, "Native library 'fxsound_dsp' loaded successfully.")
-            } catch (e: UnsatisfiedLinkError) {
-                Log.w(TAG, "Could not load 'fxsound_dsp' native library: ${e.message}")
+                try { Log.i(TAG, "Native library 'fxsound_dsp' loaded successfully.") } catch (_: Throwable) {}
+            } catch (e: Throwable) {
+                try { Log.w(TAG, "Could not load 'fxsound_dsp' native library: ${e.message}") } catch (_: Throwable) {}
                 isLibraryLoaded = false
             }
         }
@@ -27,6 +27,13 @@ class FxSoundNativeBridge {
 
     private var nativeHandle: Long = 0
 
+    var sampleRate: Int = 48000
+        private set
+    var channels: Int = 2
+        private set
+    var isInitialized: Boolean = false
+        private set
+
     init {
         if (isLibraryLoaded) {
             nativeHandle = nativeCreate()
@@ -34,8 +41,14 @@ class FxSoundNativeBridge {
     }
 
     fun init(sampleRate: Int, channels: Int): Boolean {
-        if (nativeHandle == 0L) return false
-        return nativeInit(nativeHandle, sampleRate, channels)
+        if (nativeHandle == 0L || sampleRate <= 0 || channels <= 0) return false
+        val success = nativeInit(nativeHandle, sampleRate, channels)
+        if (success) {
+            this.sampleRate = sampleRate
+            this.channels = channels
+            this.isInitialized = true
+        }
+        return success
     }
 
     fun setPower(enabled: Boolean) {
@@ -90,12 +103,16 @@ class FxSoundNativeBridge {
     }
 
     fun processPcm16(inBuf: ShortArray, outBuf: ShortArray, numFrames: Int): Int {
-        if (nativeHandle == 0L) return 0
+        if (nativeHandle == 0L || !isInitialized || numFrames <= 0 || channels <= 0) return 0
+        val requiredLength = numFrames * channels
+        if (inBuf.size < requiredLength || outBuf.size < requiredLength) return 0
         return nativeProcessPcm16(nativeHandle, inBuf, outBuf, numFrames)
     }
 
     fun processFloat(inBuf: FloatArray, outBuf: FloatArray, numFrames: Int): Int {
-        if (nativeHandle == 0L) return 0
+        if (nativeHandle == 0L || !isInitialized || numFrames <= 0 || channels <= 0) return 0
+        val requiredLength = numFrames * channels
+        if (inBuf.size < requiredLength || outBuf.size < requiredLength) return 0
         return nativeProcessFloat(nativeHandle, inBuf, outBuf, numFrames)
     }
 

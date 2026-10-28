@@ -121,9 +121,9 @@ object FxSoundRepository {
     }
 
     /** The companion service confirms (or rejects) a DynamicsProcessing attach using the plan. */
-    fun onHeadphoneAttachResult(success: Boolean) {
+    fun onHeadphoneAttachResult(success: Boolean, reason: String? = null) {
         _uiState.update { it.withHeadphoneAttachResult(success) }
-        opraInstance?.confirmApplied(success)
+        opraInstance?.confirmApplied(success, reason)
     }
 
     /**
@@ -343,14 +343,14 @@ object FxSoundRepository {
     }
 
     fun cycleNextPreset() {
-        val presets = FxSoundPreset.ALL_PRESETS
+        val presets = allPresets
         val currentIndex = presets.indexOfFirst { it.id == _uiState.value.currentPresetId }
         val nextIndex = if (currentIndex == -1 || currentIndex == presets.lastIndex) 0 else currentIndex + 1
         applyPreset(presets[nextIndex])
     }
 
     fun cyclePreviousPreset() {
-        val presets = FxSoundPreset.ALL_PRESETS
+        val presets = allPresets
         val currentIndex = presets.indexOfFirst { it.id == _uiState.value.currentPresetId }
         val prevIndex = if (currentIndex <= 0) presets.lastIndex else currentIndex - 1
         applyPreset(presets[prevIndex])

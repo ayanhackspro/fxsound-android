@@ -42,4 +42,19 @@ class FxSoundPresetTest {
         val unknown = FxSoundPreset.findById("non_existent_preset")
         assertEquals("Balanced", unknown.name)
     }
+
+    @Test
+    fun testNeutralPresetIsAcousticallyFlat() {
+        val neutral = FxSoundPreset.findById("neutral")
+        assertEquals("Neutral", neutral.name)
+        assertEquals(0.0f, neutral.clarity, 0.001f)
+        assertEquals(0.0f, neutral.bass, 0.001f)
+        for (gain in neutral.eqGains) {
+            assertEquals(0.0f, gain, 0.001f)
+        }
+        val clarityGains = com.fxsound.audio.engine.FxSoundResponseTables.fidelityBandGainsDb(neutral.clarity)
+        for (gain in clarityGains) {
+            assertEquals(0.0f, gain, 0.001f)
+        }
+    }
 }

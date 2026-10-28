@@ -36,7 +36,10 @@ object AudioFlingerSessionTracker {
         val detectedSessions = mutableSetOf<Int>()
 
         try {
-            val process = Runtime.getRuntime().exec(arrayOf("dumpsys", "media.audio_flinger"))
+            val process = ProcessBuilder("dumpsys", "media.audio_flinger")
+                .redirectErrorStream(true)
+                .start()
+
             BufferedReader(InputStreamReader(process.inputStream)).use { reader ->
                 var line: String? = reader.readLine()
                 var inPlaybackSection = false
@@ -75,7 +78,16 @@ object AudioFlingerSessionTracker {
                     line = reader.readLine()
                 }
             }
-            process.waitFor()
+
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                val finished = process.waitFor(1500, java.util.concurrent.TimeUnit.MILLISECONDS)
+                if (!finished) {
+                    process.destroyForcibly()
+                    Log.w(TAG, "dumpsys media.audio_flinger timed out and was forcibly destroyed")
+                }
+            } else {
+                process.waitFor()
+            }
         } catch (e: Exception) {
             Log.d(TAG, "dumpsys media.audio_flinger execution unavailable: ${e.message}")
         }

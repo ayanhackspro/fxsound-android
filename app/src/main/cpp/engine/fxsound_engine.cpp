@@ -38,12 +38,12 @@ FxSoundEngine::FxSoundEngine()
       currentInRms_(0.0f),
       currentOutRms_(0.0f),
       isClipping_(false),
+      isHeadroomManagementEnabled_(true),
+      userMasterGainDb_(0.0f),
       targetMasterGainDb_(0.0f),
       smoothedMasterGainDb_(0.0f),
-      userMasterGainDb_(0.0f),
       limiterGain_(1.0f),
       isCrossfeedEnabled_(false),
-      isHeadroomManagementEnabled_(true),
       crossfeedB0_(0.0f),
       crossfeedA1_(0.0f),
       crossfeedHistoryL_(0.0f),
@@ -333,7 +333,7 @@ void FxSoundEngine::applyLimiter(float* samples, int numFrames) {
 }
 
 int FxSoundEngine::processPcm16(const int16_t* inSamples, int16_t* outSamples, int numFrames) {
-    if (!inSamples || !outSamples || numFrames <= 0) return 0;
+    if (!inSamples || !outSamples || numFrames <= 0 || numChannels_ <= 0) return 0;
 
     const int totalSamples = numFrames * numChannels_;
 
@@ -404,7 +404,7 @@ int FxSoundEngine::processPcm16(const int16_t* inSamples, int16_t* outSamples, i
 }
 
 int FxSoundEngine::processFloat(const float* inSamples, float* outSamples, int numFrames) {
-    if (!inSamples || !outSamples || numFrames <= 0) return 0;
+    if (!inSamples || !outSamples || numFrames <= 0 || numChannels_ <= 0) return 0;
 
     const int totalSamples = numFrames * numChannels_;
 
@@ -540,9 +540,8 @@ void FxSoundEngine::getMetrics(FxSoundMetrics* metrics) {
 
 void FxSoundEngine::getSpectrum(float* outBands, int numBands) {
     if (!outBands || numBands <= 0) return;
+    std::memset(outBands, 0, numBands * sizeof(float));
     if (dspCore_) {
         dspCore_->getSpectrumBandValues(outBands, numBands);
-    } else {
-        std::memset(outBands, 0, numBands * sizeof(float));
     }
 }

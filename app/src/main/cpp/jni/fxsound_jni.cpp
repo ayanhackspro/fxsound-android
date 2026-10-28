@@ -98,10 +98,25 @@ JNIEXPORT jint JNICALL
 Java_com_fxsound_audio_nativebridge_FxSoundNativeBridge_nativeProcessPcm16(
     JNIEnv* env, jobject thiz, jlong handle, jshortArray inBuffer, jshortArray outBuffer, jint numFrames) {
     auto* engine = getEngine(handle);
-    if (!engine) return 0;
+    if (!engine || !inBuffer || !outBuffer || numFrames <= 0) return 0;
+
+    const int channels = engine->getNumChannels();
+    if (channels <= 0) return 0;
+
+    const jsize inLen = env->GetArrayLength(inBuffer);
+    const jsize outLen = env->GetArrayLength(outBuffer);
+    const jsize requiredSamples = static_cast<jsize>(numFrames) * channels;
+    if (inLen < requiredSamples || outLen < requiredSamples) {
+        return 0;
+    }
 
     jshort* inPtr = env->GetShortArrayElements(inBuffer, nullptr);
+    if (!inPtr) return 0;
     jshort* outPtr = env->GetShortArrayElements(outBuffer, nullptr);
+    if (!outPtr) {
+        env->ReleaseShortArrayElements(inBuffer, inPtr, JNI_ABORT);
+        return 0;
+    }
 
     int processed = engine->processPcm16(
         reinterpret_cast<const int16_t*>(inPtr),
@@ -119,10 +134,25 @@ JNIEXPORT jint JNICALL
 Java_com_fxsound_audio_nativebridge_FxSoundNativeBridge_nativeProcessFloat(
     JNIEnv* env, jobject thiz, jlong handle, jfloatArray inBuffer, jfloatArray outBuffer, jint numFrames) {
     auto* engine = getEngine(handle);
-    if (!engine) return 0;
+    if (!engine || !inBuffer || !outBuffer || numFrames <= 0) return 0;
+
+    const int channels = engine->getNumChannels();
+    if (channels <= 0) return 0;
+
+    const jsize inLen = env->GetArrayLength(inBuffer);
+    const jsize outLen = env->GetArrayLength(outBuffer);
+    const jsize requiredSamples = static_cast<jsize>(numFrames) * channels;
+    if (inLen < requiredSamples || outLen < requiredSamples) {
+        return 0;
+    }
 
     jfloat* inPtr = env->GetFloatArrayElements(inBuffer, nullptr);
+    if (!inPtr) return 0;
     jfloat* outPtr = env->GetFloatArrayElements(outBuffer, nullptr);
+    if (!outPtr) {
+        env->ReleaseFloatArrayElements(inBuffer, inPtr, JNI_ABORT);
+        return 0;
+    }
 
     int processed = engine->processFloat(inPtr, outPtr, numFrames);
 
@@ -137,6 +167,7 @@ Java_com_fxsound_audio_nativebridge_FxSoundNativeBridge_nativeGetMetrics(
     JNIEnv* env, jobject thiz, jlong handle, jfloatArray outMetrics) {
     auto* engine = getEngine(handle);
     if (!engine || !outMetrics) return;
+    if (env->GetArrayLength(outMetrics) < 5) return;
 
     FxSoundMetrics m;
     engine->getMetrics(&m);
@@ -150,8 +181,10 @@ Java_com_fxsound_audio_nativebridge_FxSoundNativeBridge_nativeGetSpectrum(
     JNIEnv* env, jobject thiz, jlong handle, jfloatArray outBands, jint numBands) {
     auto* engine = getEngine(handle);
     if (!engine || !outBands || numBands <= 0) return;
+    if (env->GetArrayLength(outBands) < numBands) return;
 
     jfloat* ptr = env->GetFloatArrayElements(outBands, nullptr);
+    if (!ptr) return;
     engine->getSpectrum(ptr, numBands);
     env->ReleaseFloatArrayElements(outBands, ptr, 0);
 }

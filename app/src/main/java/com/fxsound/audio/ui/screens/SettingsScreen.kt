@@ -46,6 +46,7 @@ import androidx.compose.ui.unit.sp
 import com.fxsound.audio.R
 import com.fxsound.audio.data.FxSoundRepository
 import com.fxsound.audio.engine.DynamicsProcessingTranslator
+import com.fxsound.audio.engine.OemAudioCompatibility
 import com.fxsound.audio.haptics.HapticsManager
 import com.fxsound.audio.model.EqRendererKind
 import com.fxsound.audio.model.FxSoundUiState
@@ -333,6 +334,83 @@ fun SettingsScreen(
 
         Spacer(modifier = Modifier.height(24.dp))
 
+        // OEM Audio Compatibility & Sound Suite Guidance
+        val oemAdvice = remember { OemAudioCompatibility.getDeviceAdvice() }
+        Text(
+            text = "DEVICE AUDIO COMPATIBILITY",
+            color = TextSecondary,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Bold,
+            letterSpacing = 1.sp
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = DarkSurfaceCard),
+            shape = RoundedCornerShape(14.dp),
+            border = androidx.compose.foundation.BorderStroke(1.dp, BorderSubtle)
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text(
+                    text = "${oemAdvice.brand.displayName} Audio Engine Profile",
+                    color = TextPrimary,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Text(
+                    text = "Hardware Manufacturer: ${android.os.Build.MANUFACTURER} (${android.os.Build.MODEL})",
+                    color = TextTertiary,
+                    fontSize = 11.sp
+                )
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                Text(
+                    text = oemAdvice.advice,
+                    color = TextSecondary,
+                    fontSize = 12.sp,
+                    lineHeight = 17.sp
+                )
+
+                if (oemAdvice.hasBuiltInEffects) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Tip: ${oemAdvice.brand.conflictingEffectName} runs downstream of FxSound. Turning it off prevents double EQ curves and phase distortion.",
+                        color = PendingAmber,
+                        fontSize = 11.sp,
+                        lineHeight = 15.sp
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                OutlinedButton(
+                    onClick = {
+                        val opened = OemAudioCompatibility.openSoundSettings(context)
+                        if (!opened) {
+                            Toast.makeText(context, "Could not open sound settings automatically", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = TextPrimary),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, BorderSubtle),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Text(
+                        text = "OPEN SYSTEM SOUND SETTINGS",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 0.5.sp,
+                        color = TextPrimary
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(24.dp))
+
         // Engine Diagnostics
         Text(
             text = "AUDIO ENGINE DIAGNOSTICS",
@@ -506,7 +584,10 @@ private fun DiagnosticRow(label: String, value: String) {
 
 /** What the EQ is actually attached to, for the diagnostics card. */
 private fun eqRendererLabel(state: FxSoundUiState): String = when (state.eqRenderer.kind) {
-    EqRendererKind.DYNAMICS_PROCESSING -> "DynamicsProcessing (10 bands)"
+    EqRendererKind.DYNAMICS_PROCESSING -> {
+        val tier = state.eqRenderer.tierLabel?.let { " ($it)" } ?: " (10 bands)"
+        "DynamicsProcessing$tier"
+    }
     EqRendererKind.PLATFORM_EQUALIZER ->
         "Platform Equalizer (" + state.eqRenderer.bandCount + " bands)"
     EqRendererKind.NONE -> "None (no session attached)"

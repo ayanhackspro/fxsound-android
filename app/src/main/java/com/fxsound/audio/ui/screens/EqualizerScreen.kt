@@ -40,6 +40,8 @@ import androidx.compose.ui.unit.sp
 import com.fxsound.audio.R
 import com.fxsound.audio.data.FxSoundRepository
 import com.fxsound.audio.haptics.HapticsManager
+import com.fxsound.audio.model.EqRendererKind
+import com.fxsound.audio.model.StageState
 import com.fxsound.audio.ui.components.EqualizerCurveView
 import com.fxsound.audio.ui.components.VerticalEqualizerFader
 import com.fxsound.audio.ui.theme.BorderSubtle
@@ -196,6 +198,41 @@ fun EqualizerScreen(
                     }
                 }
 
+                // Live stage status / HAL update rejection alert
+                if (state.stageReport.eq == StageState.FAILED) {
+                    Text(
+                        text = "Device audio HAL rejected live EQ parameter updates. External session audio may diverge from console positions.",
+                        color = FxRedPrimary,
+                        fontSize = 10.sp,
+                        lineHeight = 14.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 10.dp)
+                    )
+                }
+
+                // Active renderer status
+                val rendererText = when (state.eqRenderer.kind) {
+                    EqRendererKind.DYNAMICS_PROCESSING -> {
+                        val tier = state.eqRenderer.tierLabel?.let { " ($it)" } ?: " (Studio Precision 10-Band)"
+                        "Active Renderer: DynamicsProcessing$tier"
+                    }
+                    EqRendererKind.PLATFORM_EQUALIZER -> "Active Renderer: System Equalizer (${state.eqRenderer.bandCount} bands)"
+                    EqRendererKind.NONE -> "Active Renderer: None (Audio effects unavailable)"
+                    EqRendererKind.UNKNOWN -> "Active Renderer: System Audio / Standby"
+                }
+                Text(
+                    text = rendererText,
+                    color = when (state.eqRenderer.kind) {
+                        EqRendererKind.DYNAMICS_PROCESSING -> TextTertiary
+                        EqRendererKind.PLATFORM_EQUALIZER -> PendingAmber
+                        EqRendererKind.NONE -> FxRedPrimary
+                        EqRendererKind.UNKNOWN -> TextTertiary
+                    },
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 6.dp)
+                )
+
                 // Honest renderer note: a platform equalizer with fewer bands than the
                 // console cannot move 8k and 16k independently, so say so where the faders
                 // are rather than only in Settings.
@@ -207,7 +244,7 @@ fun EqualizerScreen(
                         color = PendingAmber,
                         fontSize = 10.sp,
                         lineHeight = 14.sp,
-                        modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 10.dp)
+                        modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 6.dp)
                     )
                 }
             }

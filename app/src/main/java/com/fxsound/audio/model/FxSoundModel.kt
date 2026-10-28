@@ -66,12 +66,24 @@ data class FxSoundPreset(
         val BALANCED = FxSoundPreset(
             id = "balanced",
             name = "Balanced",
-            description = "Natural acoustic balance suitable for all genres",
+            description = "Crisp, bright balance with enhanced vocal clarity and presence",
             clarity = 5.0f,
             ambience = 2.0f,
             surround = 3.0f,
             dynamicBoost = 4.0f,
             bass = 4.0f,
+            eqGains = listOf(0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f)
+        )
+
+        val NEUTRAL = FxSoundPreset(
+            id = "neutral",
+            name = "Neutral",
+            description = "Acoustically flat reference baseline with no added treble or bass colouration",
+            clarity = 0.0f,
+            ambience = 0.0f,
+            surround = 0.0f,
+            dynamicBoost = 0.0f,
+            bass = 0.0f,
             eqGains = listOf(0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f)
         )
 
@@ -123,7 +135,7 @@ data class FxSoundPreset(
             eqGains = listOf(3.0f, 2.0f, 1.0f, 0.0f, 1.0f, 2.0f, 3.0f, 4.0f, 4.5f, 5.0f)
         )
 
-        val ALL_PRESETS = listOf(BALANCED, MUSIC, VOICE, BASS_BOOST, GAMING)
+        val ALL_PRESETS = listOf(BALANCED, NEUTRAL, MUSIC, VOICE, BASS_BOOST, GAMING)
 
         fun findById(id: String): FxSoundPreset = ALL_PRESETS.firstOrNull { it.id == id } ?: BALANCED
     }
@@ -218,7 +230,8 @@ enum class EqRendererKind { UNKNOWN, NONE, DYNAMICS_PROCESSING, PLATFORM_EQUALIZ
  */
 data class EqRendererInfo(
     val kind: EqRendererKind = EqRendererKind.UNKNOWN,
-    val bandCount: Int = 0
+    val bandCount: Int = 0,
+    val tierLabel: String? = null
 ) {
     /** True when the sliders are being squeezed onto fewer bands than the console shows. */
     val isBandCollapsed: Boolean

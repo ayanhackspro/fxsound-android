@@ -37,6 +37,13 @@ import com.fxsound.audio.model.FxStageReport
 import com.fxsound.audio.model.RouteStatus
 import com.fxsound.audio.model.StageState
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * Foreground companion service managing active audio effect sessions for Spotify
@@ -60,6 +67,8 @@ class SessionCompanionService : Service() {
 
         private const val SESSION_TIMEOUT_MS = 15 * 60 * 1000L // 15 min idle watchdog
         private const val WATCHDOG_INTERVAL_MS = 2500L         // Fast 2.5s polling for immediate responsiveness
+        private const val MAX_CONCURRENT_SESSIONS = 16         // Defensive cap against rogue session broadcast floods
+        private const val EFFECT_PRIORITY = 100                // Elevated priority over OEM background audio services
 
         fun start(context: Context) {
             val intent = Intent(context, SessionCompanionService::class.java).apply {
@@ -84,6 +93,7 @@ class SessionCompanionService : Service() {
         val sessionId: Int,
         val packageName: String?,
         var dynamicsProcessing: DynamicsProcessing? = null,
+        var dynamicsTier: DynamicsProcessingTranslator.DynamicsTier? = null,
         var equalizer: Equalizer? = null,
         var bassBoost: BassBoost? = null,
         var virtualizer: Virtualizer? = null,
@@ -107,6 +117,9 @@ class SessionCompanionService : Service() {
     private val activeSessions = ConcurrentHashMap<Int, ActiveSession>()
     private var audioManager: AudioManager? = null
     private var audioDeviceCallback: AudioDeviceCallback? = null
+
+    private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+    private val isAudioFlingerQueryRunning = AtomicBoolean(false)
 
     private var currentWatchdogDelay = WATCHDOG_INTERVAL_MS
     private var lastMusicActiveTimeMs = System.currentTimeMillis()
@@ -271,12 +284,24 @@ class SessionCompanionService : Service() {
             currentWatchdogDelay = WATCHDOG_INTERVAL_MS
 
             // Rootless Wavelet/Poweramp tracker: Discover active playback sessions from AudioFlinger
-            if (hasDump) {
-                val detected = AudioFlingerSessionTracker.queryActiveSessions()
-                for (sessId in detected) {
-                    if (!activeSessions.containsKey(sessId)) {
-                        Log.i(TAG, "AudioFlinger tracker found active session $sessId. Attaching...")
-                        onSessionOpened(sessId, "Media Player #$sessId")
+            // Offloaded to Dispatchers.IO to ensure dumpsys never blocks the main looper
+            if (hasDump && isAudioFlingerQueryRunning.compareAndSet(false, true)) {
+                serviceScope.launch {
+                    val detected = try {
+                        withContext(Dispatchers.IO) {
+                            AudioFlingerSessionTracker.queryActiveSessions()
+                        }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Failed querying AudioFlinger sessions: ${e.message}")
+                        emptyList()
+                    } finally {
+                        isAudioFlingerQueryRunning.set(false)
+                    }
+                    for (sessId in detected) {
+                        if (!activeSessions.containsKey(sessId)) {
+                            Log.i(TAG, "AudioFlinger tracker found active session $sessId. Attaching...")
+                            onSessionOpened(sessId, "Media Player #$sessId")
+                        }
                     }
                 }
             }
@@ -294,9 +319,12 @@ class SessionCompanionService : Service() {
                 }
             }
         } else {
-            // Zero-wakelock battery conservation: Throttle polling to 10s if audio has been idle for > 15 seconds
-            if (now - lastMusicActiveTimeMs > 15000L) {
-                currentWatchdogDelay = 10000L
+            // Zero-wakelock battery conservation: Throttle polling to 10s if idle > 15s, and 30s if idle > 60s
+            val idleMs = now - lastMusicActiveTimeMs
+            currentWatchdogDelay = when {
+                idleMs > 60000L -> 30000L
+                idleMs > 15000L -> 10000L
+                else -> WATCHDOG_INTERVAL_MS
             }
 
             val expiredSessions = mutableListOf<Int>()
@@ -330,43 +358,15 @@ class SessionCompanionService : Service() {
         // same audio can never pass through two chains (ADR-030).
         val onlyGlobalChain = activeSessions.keys.none { it != 0 }
 
-        // 1. DynamicsProcessing on Session 0 (Multi-band compressor, pre/post EQ, peak limiter)
-        try {
-            val config = DynamicsProcessingTranslator.buildDynamicsConfig(
-                isPowerOn = state.isPowerOn,
-                effects = state.effects,
-                eqGains = state.eqGains,
-                masterGainDb = state.masterGainDb,
-                headphonePlan = state.headphonePlan
-            )
-            val dp = DynamicsProcessing(0, 0, config).apply {
-                enabled = state.isPowerOn && onlyGlobalChain
-            }
-            session.dynamicsProcessing = dp
-            session.eqStage = StageState.ACTIVE
-            session.usesPreEqHyperBass = state.headphonePlan == null
-            session.preEqBandCount = state.headphonePlan?.bands?.size ?: 10
-            FxSoundRepository.onHeadphoneAttachResult(true)
-            Log.i(TAG, "DynamicsProcessing attached to Session 0 successfully.")
-        } catch (e: Exception) {
-            Log.w(TAG, "DynamicsProcessing on Session 0 unavailable: ${e.message}. Using standard Equalizer fallback.")
-            try {
-                val eq = Equalizer(0, 0).apply {
-                    applyEqualizerBands(this, state.eqGains, state.effects[FxSoundEffectId.FIDELITY] ?: 5.0f)
-                    enabled = state.isPowerOn && onlyGlobalChain
-                }
-                session.equalizer = eq
-                session.eqStage = StageState.ACTIVE
-                Log.i(TAG, "Standard Equalizer attached to Session 0 successfully.")
-            } catch (eqEx: Exception) {
-                session.eqStage = StageState.UNSUPPORTED
-                Log.w(TAG, "Standard Equalizer also unavailable on Session 0: ${eqEx.message}")
-            }
+        // 1. DynamicsProcessing on Session 0 with multi-tier negotiation
+        val attachOk = attachDynamicsProcessing(session, state)
+        if (!attachOk) {
+            Log.w(TAG, "DynamicsProcessing on Session 0 unavailable across all tiers. Using standard Equalizer fallback.")
+        } else {
+            session.dynamicsProcessing?.enabled = state.isPowerOn && onlyGlobalChain
         }
 
-        // 2. BassBoost on Session 0 — only when DynamicsProcessing is absent.
-        // When the Pre-EQ HyperBass contour is active, a second low-frequency boost would
-        // compound the gain and drive the limiter into continuous reduction.
+        // 2. BassBoost on Session 0 — only when DynamicsProcessing does not provide HyperBass
         val bassStrategy = DynamicsProcessingTranslator.resolveBassStrategy(
             hasDynamicsProcessing = session.dynamicsProcessing != null,
             bassEffectValue = state.effects[FxSoundEffectId.BASS] ?: 4.0f,
@@ -375,7 +375,7 @@ class SessionCompanionService : Service() {
         session.usesPreEqHyperBass = bassStrategy.usesPreEqHyperBass
         if (session.dynamicsProcessing == null && state.headphonePlan == null) {
             try {
-                val bass = BassBoost(0, 0).apply {
+                val bass = BassBoost(EFFECT_PRIORITY, 0).apply {
                     setStrength(bassStrategy.standaloneBassBoostStrength)
                     enabled = state.isPowerOn && onlyGlobalChain
                 }
@@ -417,15 +417,13 @@ class SessionCompanionService : Service() {
             gainsDb[band] = (userGain + clarityBoost).coerceIn(-14.0f, 14.0f)
         }
 
-        // This path has no preamp or limiter, so a positive boost that survives to the
-        // output clips at high volume — the same level-dependence as the DynamicsProcessing
-        // chain, but with no headroom control at all. Subtracting the largest boost from
-        // every band keeps the relative curve (the audible EQ shape) while preventing the
-        // boost from adding peak gain. A flatter, quieter result is honest; a clipping
-        // "louder" result is not.
+        // Headroom compensation for fallback path:
+        // Proportional compensation matched to DynamicsProcessing's input gain staging.
+        // Prevents output clipping while maintaining consistent perceived loudness across devices.
         val peakBoostDb = gainsDb.maxOrNull()?.coerceAtLeast(0.0f) ?: 0.0f
+        val compDb = (peakBoostDb * 0.45f).coerceIn(0.0f, 6.0f)
         for (band in 0 until numBands) {
-            val levelDb = gainsDb[band] - peakBoostDb
+            val levelDb = gainsDb[band] - compDb
             val millibels = PlatformEqMapper.millibels(levelDb, minLevel, maxLevel)
             eq.setBandLevel(band.toShort(), millibels)
         }
@@ -433,44 +431,27 @@ class SessionCompanionService : Service() {
 
     private fun onSessionOpened(sessionId: Int, packageName: String?) {
         Log.i(TAG, "Audio session opened: id=$sessionId, package=$packageName")
+        if (activeSessions.size >= MAX_CONCURRENT_SESSIONS && !activeSessions.containsKey(sessionId)) {
+            Log.w(TAG, "Refusing session $sessionId: active session capacity reached ($MAX_CONCURRENT_SESSIONS)")
+            return
+        }
+
+        currentWatchdogDelay = WATCHDOG_INTERVAL_MS
+        lastMusicActiveTimeMs = System.currentTimeMillis()
 
         val state = FxSoundRepository.uiState.value
         val session = ActiveSession(sessionId, packageName)
 
         try {
-            // 1. DynamicsProcessing (Pre-EQ, Multi-band Compressor, Post-EQ, Peak Limiter)
-            val config = DynamicsProcessingTranslator.buildDynamicsConfig(
-                isPowerOn = state.isPowerOn,
-                effects = state.effects,
-                eqGains = state.eqGains,
-                masterGainDb = state.masterGainDb,
-                headphonePlan = state.headphonePlan
-            )
-            try {
-                val dp = DynamicsProcessing(0, sessionId, config).apply {
-                    enabled = state.isPowerOn
-                }
-                session.dynamicsProcessing = dp
-                session.eqStage = StageState.ACTIVE
-                session.preEqBandCount = state.headphonePlan?.bands?.size ?: 10
+            // 1. DynamicsProcessing with multi-tier fallback (Pre-EQ, MBC, Post-EQ, Limiter)
+            val attachOk = attachDynamicsProcessing(session, state)
+            if (attachOk) {
                 if (state.headphonePlan != null) FxSoundRepository.onHeadphoneAttachResult(true)
-            } catch (dpEx: Exception) {
-                Log.w(TAG, "DynamicsProcessing failed on session $sessionId, falling back to Equalizer: ${dpEx.message}")
-                try {
-                    val eq = Equalizer(0, sessionId).apply {
-                        applyEqualizerBands(this, state.eqGains, state.effects[FxSoundEffectId.FIDELITY] ?: 5.0f)
-                        enabled = state.isPowerOn
-                    }
-                    session.equalizer = eq
-                    session.eqStage = StageState.ACTIVE
-                } catch (eqEx: Exception) {
-                    session.eqStage = StageState.UNSUPPORTED
-                    Log.w(TAG, "Equalizer also failed on session $sessionId: ${eqEx.message}")
-                }
+            } else {
+                Log.w(TAG, "DynamicsProcessing unavailable across all tiers for session $sessionId; Equalizer fallback engaged.")
             }
 
-            // 2. BassBoost (Low-end resonance) — only when DynamicsProcessing is absent, so the
-            // Pre-EQ HyperBass contour and the standalone boost never run in series.
+            // 2. BassBoost (Low-end resonance) — only when DynamicsProcessing does not provide HyperBass
             val bassStrategy = DynamicsProcessingTranslator.resolveBassStrategy(
                 hasDynamicsProcessing = session.dynamicsProcessing != null,
                 bassEffectValue = state.effects[FxSoundEffectId.BASS] ?: 4.0f,
@@ -479,7 +460,7 @@ class SessionCompanionService : Service() {
             session.usesPreEqHyperBass = bassStrategy.usesPreEqHyperBass
             if (session.dynamicsProcessing == null && state.headphonePlan == null) {
                 try {
-                    val bass = BassBoost(0, sessionId).apply {
+                    val bass = BassBoost(EFFECT_PRIORITY, sessionId).apply {
                         setStrength(bassStrategy.standaloneBassBoostStrength)
                         enabled = state.isPowerOn
                     }
@@ -558,30 +539,90 @@ class SessionCompanionService : Service() {
         enforceSingleChain()
     }
 
-    /** Re-creates the DynamicsProcessing effect on a live session with a fresh config. */
+    /**
+     * Attaches DynamicsProcessing to the session using multi-tier capability negotiation.
+     * Starts at [preferredTier] (or Tier 1 Full Precision) and falls back to Tier 2 (Streamlined)
+     * and Tier 3 (Essential) if the OEM HAL rejects the full dual-EQ stage configuration.
+     *
+     * @return true if DynamicsProcessing was successfully attached on any tier; false if fallback needed.
+     */
     private fun attachDynamicsProcessing(
         session: ActiveSession,
-        config: DynamicsProcessing.Config,
-        state: FxSoundUiState
+        state: FxSoundUiState,
+        preferredTier: DynamicsProcessingTranslator.DynamicsTier? = null
     ): Boolean {
-        return try {
-            session.dynamicsProcessing?.release()
-            val dp = DynamicsProcessing(0, session.sessionId, config).apply {
-                enabled = state.isPowerOn
+        val oldDp = session.dynamicsProcessing
+        val allTiers = DynamicsProcessingTranslator.DynamicsTier.values().toList()
+        val candidateTiers = if (preferredTier != null) {
+            val startIndex = allTiers.indexOf(preferredTier).coerceAtLeast(0)
+            allTiers.subList(startIndex, allTiers.size)
+        } else {
+            allTiers
+        }
+
+        for (tier in candidateTiers) {
+            try {
+                val tierConfig = DynamicsProcessingTranslator.buildDynamicsConfig(
+                    isPowerOn = state.isPowerOn,
+                    effects = state.effects,
+                    eqGains = state.eqGains,
+                    masterGainDb = state.masterGainDb,
+                    headphonePlan = state.headphonePlan,
+                    tier = tier
+                )
+                val dp = DynamicsProcessing(EFFECT_PRIORITY, session.sessionId, tierConfig).apply {
+                    enabled = state.isPowerOn
+                }
+                try { oldDp?.release() } catch (_: Exception) {}
+                session.dynamicsProcessing = dp
+                session.dynamicsTier = tier
+                session.usesPreEqHyperBass = (tier == DynamicsProcessingTranslator.DynamicsTier.TIER_1_FULL && state.headphonePlan == null)
+                session.preEqBandCount = state.headphonePlan?.bands?.size ?: 10
+                session.eqStage = StageState.ACTIVE
+                Log.i(TAG, "DynamicsProcessing attached on session ${session.sessionId} with ${tier.label} (priority=$EFFECT_PRIORITY)")
+                return true
+            } catch (e: Exception) {
+                Log.w(TAG, "DynamicsProcessing ${tier.name} rejected on session ${session.sessionId}: ${e.message}")
             }
-            session.dynamicsProcessing = dp
-            session.usesPreEqHyperBass = state.headphonePlan == null
-            session.preEqBandCount = state.headphonePlan?.bands?.size ?: 10
-            session.eqStage = StageState.ACTIVE
-            Log.i(TAG, "DynamicsProcessing recreated on session ${session.sessionId} (Pre-EQ band count changed).")
-            true
-        } catch (e: Exception) {
-            Log.w(TAG, "DynamicsProcessing recreation failed on session ${session.sessionId}: ${e.message}")
-            // The previous instance was already released; never leave a released effect in use.
-            session.dynamicsProcessing = null
-            session.eqStage = StageState.FAILED
-            FxSoundRepository.onHeadphoneAttachResult(false)
-            false
+        }
+
+        // All tiers rejected by device HAL — clean up and fall back to platform Equalizer + BassBoost
+        try { oldDp?.release() } catch (_: Exception) {}
+        session.dynamicsProcessing = null
+        session.dynamicsTier = null
+        session.eqStage = StageState.FAILED
+        FxSoundRepository.onHeadphoneAttachResult(false)
+        attachFallbackForSession(session, state)
+        return false
+    }
+
+    private fun attachFallbackForSession(session: ActiveSession, state: FxSoundUiState) {
+        if (session.equalizer == null) {
+            try {
+                val eq = Equalizer(EFFECT_PRIORITY, session.sessionId).apply {
+                    applyEqualizerBands(this, state.eqGains, state.effects[FxSoundEffectId.FIDELITY] ?: 5.0f)
+                    enabled = state.isPowerOn
+                }
+                session.equalizer = eq
+                session.eqStage = StageState.ACTIVE
+                Log.i(TAG, "Fallback Equalizer attached with priority $EFFECT_PRIORITY on session ${session.sessionId}")
+            } catch (eqEx: Exception) {
+                Log.w(TAG, "Fallback Equalizer failed on session ${session.sessionId}: ${eqEx.message}")
+            }
+        }
+        if (session.bassBoost == null) {
+            try {
+                val bb = BassBoost(EFFECT_PRIORITY, session.sessionId).apply {
+                    val bassEffect = state.effects[FxSoundEffectId.BASS] ?: 4.0f
+                    setStrength((bassEffect * 100f).toInt().coerceIn(0, 1000).toShort())
+                    enabled = state.isPowerOn
+                }
+                session.bassBoost = bb
+                session.bassStage = StageState.ACTIVE
+                Log.i(TAG, "Fallback BassBoost attached with priority $EFFECT_PRIORITY on session ${session.sessionId}")
+            } catch (bbEx: Exception) {
+                Log.w(TAG, "Fallback BassBoost failed on session ${session.sessionId}: ${bbEx.message}")
+            }
         }
     }
 
@@ -607,13 +648,20 @@ class SessionCompanionService : Service() {
     }
 
     private fun updateAllActiveSessions(state: FxSoundUiState) {
-        val config = DynamicsProcessingTranslator.buildDynamicsConfig(
-            isPowerOn = state.isPowerOn,
-            effects = state.effects,
-            eqGains = state.eqGains,
-            masterGainDb = state.masterGainDb,
-            headphonePlan = state.headphonePlan
-        )
+        val tierConfigs = mutableMapOf<DynamicsProcessingTranslator.DynamicsTier, DynamicsProcessing.Config>()
+        fun getConfigForTier(tier: DynamicsProcessingTranslator.DynamicsTier): DynamicsProcessing.Config {
+            return tierConfigs.getOrPut(tier) {
+                DynamicsProcessingTranslator.buildDynamicsConfig(
+                    isPowerOn = state.isPowerOn,
+                    effects = state.effects,
+                    eqGains = state.eqGains,
+                    masterGainDb = state.masterGainDb,
+                    headphonePlan = state.headphonePlan,
+                    tier = tier
+                )
+            }
+        }
+
         val bassEffectValue = state.effects[FxSoundEffectId.BASS] ?: 4.0f
         val virtStrength = DynamicsProcessingTranslator.translateVirtualizer(
             state.effects[FxSoundEffectId.SURROUND] ?: 3.0f
@@ -635,23 +683,40 @@ class SessionCompanionService : Service() {
 
         for ((id, session) in activeSessions) {
             val processThisSession = id != 0 || !hasExplicitSessions
-            // 1. DynamicsProcessing (Pre-EQ, MBC, Post-EQ, Limiter)
+            // 1. DynamicsProcessing (Tier 1 Full, Tier 2 Streamlined, Tier 3 Essential)
             // If the OPRA plan changed the Pre-EQ band count, the live effect must be
             // recreated — stage setters reject a band-count mismatch.
             val planBandCount = state.headphonePlan?.bands?.size ?: 10
             if (state.headphonePlan != null && session.preEqBandCount != planBandCount) {
-                val attachOk = attachDynamicsProcessing(session, config, state)
+                val attachOk = attachDynamicsProcessing(session, state, preferredTier = session.dynamicsTier)
                 session.preEqBandCount = if (attachOk) planBandCount else session.preEqBandCount
-                continue
+                if (attachOk) {
+                    continue
+                }
             }
             try {
                 session.dynamicsProcessing?.apply {
+                    val tier = session.dynamicsTier ?: DynamicsProcessingTranslator.DynamicsTier.TIER_1_FULL
+                    val config = getConfigForTier(tier)
                     try {
                         setInputGainAllChannelsTo(config.getInputGainByChannelIndex(0))
-                        setPreEqAllChannelsTo(config.getPreEqByChannelIndex(0))
-                        setMbcAllChannelsTo(config.getMbcByChannelIndex(0))
-                        setPostEqAllChannelsTo(config.getPostEqByChannelIndex(0))
-                        setLimiterAllChannelsTo(config.getLimiterByChannelIndex(0))
+                        when (tier) {
+                            DynamicsProcessingTranslator.DynamicsTier.TIER_1_FULL -> {
+                                setPreEqAllChannelsTo(config.getPreEqByChannelIndex(0))
+                                setMbcAllChannelsTo(config.getMbcByChannelIndex(0))
+                                setPostEqAllChannelsTo(config.getPostEqByChannelIndex(0))
+                                setLimiterAllChannelsTo(config.getLimiterByChannelIndex(0))
+                            }
+                            DynamicsProcessingTranslator.DynamicsTier.TIER_2_STREAMLINED -> {
+                                setMbcAllChannelsTo(config.getMbcByChannelIndex(0))
+                                setPostEqAllChannelsTo(config.getPostEqByChannelIndex(0))
+                                setLimiterAllChannelsTo(config.getLimiterByChannelIndex(0))
+                            }
+                            DynamicsProcessingTranslator.DynamicsTier.TIER_3_ESSENTIAL -> {
+                                setPostEqAllChannelsTo(config.getPostEqByChannelIndex(0))
+                                setLimiterAllChannelsTo(config.getLimiterByChannelIndex(0))
+                            }
+                        }
                     } catch (stageEx: Exception) {
                         // Fallback to monolithic channel copy if stage setters encounter OEM HAL restrictions
                         setAllChannelsTo(config.getChannelByChannelIndex(0))
@@ -777,7 +842,7 @@ class SessionCompanionService : Service() {
     ): Virtualizer? {
         val sessionId = session.sessionId
         return try {
-            val virt = Virtualizer(0, sessionId)
+            val virt = Virtualizer(EFFECT_PRIORITY, sessionId)
             val strengthSupported = runCatching { virt.strengthSupported }.getOrDefault(false)
             session.virtualizerStrengthSupported = strengthSupported
             if (strengthSupported) {
@@ -828,19 +893,22 @@ class SessionCompanionService : Service() {
     private fun reportEqRenderer(session: ActiveSession) {
         val info = when {
             session.dynamicsProcessing != null -> EqRendererInfo(
-                EqRendererKind.DYNAMICS_PROCESSING,
-                10
+                kind = EqRendererKind.DYNAMICS_PROCESSING,
+                bandCount = 10,
+                tierLabel = session.dynamicsTier?.label
             )
             session.equalizer != null -> EqRendererInfo(
-                EqRendererKind.PLATFORM_EQUALIZER,
-                runCatching { session.equalizer!!.numberOfBands.toInt() }.getOrDefault(0)
+                kind = EqRendererKind.PLATFORM_EQUALIZER,
+                bandCount = runCatching { session.equalizer!!.numberOfBands.toInt() }.getOrDefault(0),
+                tierLabel = null
             )
             else -> EqRendererInfo(
-                EqRendererKind.NONE,
-                0
+                kind = EqRendererKind.NONE,
+                bandCount = 0,
+                tierLabel = null
             )
         }
-        Log.i(TAG, "EQ renderer for session ${session.sessionId}: ${info.kind} (${info.bandCount} bands)")
+        Log.i(TAG, "EQ renderer for session ${session.sessionId}: ${info.kind} (${info.bandCount} bands, tier=${info.tierLabel})")
         FxSoundRepository.setEqRenderer(info)
     }
 
@@ -943,6 +1011,7 @@ class SessionCompanionService : Service() {
 
     override fun onDestroy() {
         Log.i(TAG, "SessionCompanionService destroyed.")
+        serviceScope.cancel()
         watchdogHandler.removeCallbacks(watchdogRunnable)
         audioDeviceCallback?.let {
             audioManager?.unregisterAudioDeviceCallback(it)

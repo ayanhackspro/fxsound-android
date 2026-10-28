@@ -58,6 +58,9 @@ public:
     void setMasterGain(float gainDb);
     float getMasterGain() const;
 
+    int getNumChannels() const { return numChannels_; }
+    int getSampleRate() const { return sampleRate_; }
+
     /**
      * Flattens all 31 upstream graphic EQ bands to 0 dB in every state storage
      * (memory and registry), including any filter state a preset would have left

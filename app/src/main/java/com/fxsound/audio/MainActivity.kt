@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import android.media.audiofx.AudioEffect
 import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -115,7 +116,15 @@ class MainActivity : ComponentActivity() {
                     putExtra(AudioEffect.EXTRA_AUDIO_SESSION, sessionId)
                     putExtra(AudioEffect.EXTRA_PACKAGE_NAME, packageName)
                 }
-                startService(serviceIntent)
+                try {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        startForegroundService(serviceIntent)
+                    } else {
+                        startService(serviceIntent)
+                    }
+                } catch (e: Exception) {
+                    Log.w("MainActivity", "Failed to forward session $sessionId to companion service: ${e.message}")
+                }
             }
         }
     }

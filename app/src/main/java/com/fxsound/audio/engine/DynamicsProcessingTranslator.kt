@@ -87,19 +87,31 @@ object DynamicsProcessingTranslator {
     }
 
     /**
+     * DynamicsProcessing capability tiers for universal Android OEM compatibility.
+     * Allows negotiating down from dual-EQ to streamlined configurations on memory-constrained HALs.
+     */
+    enum class DynamicsTier(val label: String) {
+        TIER_1_FULL("Tier 1: Full Precision (Dual-EQ + MBC + Limiter)"),
+        TIER_2_STREAMLINED("Tier 2: Streamlined (Combined 10-Band EQ + MBC + Limiter)"),
+        TIER_3_ESSENTIAL("Tier 3: Essential (Combined 10-Band EQ + Limiter)")
+    }
+
+    /**
      * Builds a comprehensive DynamicsProcessing.Config object representing current FxSound settings.
      * Uses VARIANT_FAVOR_TIME_RESOLUTION for phase accuracy and low-latency transient response.
      *
      * @param headphonePlan optional OPRA headphone-correction plan. It REPLACES the Pre-EQ
      *   bass contour while active — the headphone curve is then the single low-frequency
      *   stage (ADR-019 single-bass rule) and the standalone BassBoost stays off.
+     * @param tier capability tier to generate. Tier 2 cuts stage count in half for constrained OEM HALs.
      */
     fun buildDynamicsConfig(
         isPowerOn: Boolean,
         effects: Map<FxSoundEffectId, Float>,
         eqGains: List<Float>,
         masterGainDb: Float = 0.0f,
-        headphonePlan: com.fxsound.audio.opra.HeadphoneEqPlan? = null
+        headphonePlan: com.fxsound.audio.opra.HeadphoneEqPlan? = null,
+        tier: DynamicsTier = DynamicsTier.TIER_1_FULL
     ): Config {
         val clarity = effects[FxSoundEffectId.FIDELITY] ?: 5.0f
         val dynamicBoost = effects[FxSoundEffectId.DYNAMIC_BOOST] ?: 4.0f
@@ -107,43 +119,10 @@ object DynamicsProcessingTranslator {
 
         val channelCount = 2 // Stereo
 
-        // 1. Channel Pre-EQ (Pre-emphasis & HyperBass shaping)
-        // The band gains are the upstream DSP's measured bass response rather than a
-        // hand-authored approximation. See FxSoundResponseTables.
-        // With an OPRA headphone plan active, the Pre-EQ is re-tasked to the converted
-        // headphone-correction curve and the HyperBass contour is skipped.
-        var preEqBandCount = 10
-        val preEq: Eq = if (headphonePlan != null) {
-            preEqBandCount = headphonePlan.bands.size
-            Eq(true, isPowerOn, headphonePlan.bands.size).apply {
-                for ((i, band) in headphonePlan.bands.withIndex()) {
-                    setBand(i, EqBand(true, band.frequencyHz, band.gainDb))
-                }
-            }
-        } else {
-            val bassBandGains = FxSoundResponseTables.bassBandGainsDb(bass)
-            Eq(true, isPowerOn, 10).apply {
-                for (i in 0 until 10) {
-                    setBand(i, EqBand(true, EQ_FREQUENCIES[i].toFloat(), bassBandGains[i]))
-                }
-            }
-        }
-
-        // 2. Multi-Band Compressor (FxSound Dynamic Boost / Maximizer)
-        // The upstream's Dynamic Boost is a multi-band automatic maximiser: it applies a
-        // make-up gain below a knee and bends above it. Both the make-up gain and the knee
-        // are measured, so they are used directly. The ratio is not measured, because the
-        // upstream's above-knee curve is a multi-band behaviour that a single compressor
-        // cannot reproduce; the platform's output limiter handles the peak.
+        // Multi-Band Compressor (FxSound Dynamic Boost / Maximizer)
         val mbcMakeUpDb = FxSoundResponseTables.dynamicMakeUpDb(dynamicBoost)
         val mbcThresholdDb = FxSoundResponseTables.dynamicKneeDb(dynamicBoost)
         val mbcRatio = 2.0f
-
-        // Frequency-dependent attack/release parameters for punchy dynamics without pumping:
-        // Band 0 (Sub/Bass): 30ms attack lets bass transients punch cleanly through without squashing
-        // Band 1 (Low-Mid): 12ms attack, 80ms release
-        // Band 2 (High-Mid): 5ms attack, 50ms release
-        // Band 3 (High): 2ms attack, 35ms release
         val mbcAttackTimes = floatArrayOf(30.0f, 12.0f, 5.0f, 2.0f)
         val mbcReleaseTimes = floatArrayOf(120.0f, 80.0f, 50.0f, 35.0f)
 
@@ -166,19 +145,7 @@ object DynamicsProcessingTranslator {
             }
         }
 
-        // 3. Channel Post-EQ (10-Band Graphic EQ + FxSound Clarity / Vocal Exciter)
-        // The clarity contribution is the upstream DSP's measured response: a presence-and-air
-        // shelf from 2.5 kHz to 16 kHz with a scoop around 800 Hz to 1 kHz.
-        val clarityBandGains = FxSoundResponseTables.fidelityBandGainsDb(clarity)
-        val postEq = Eq(true, isPowerOn, 10).apply {
-            for (i in 0 until 10) {
-                val userGain = eqGains.getOrElse(i) { 0.0f }
-                val totalGain = (userGain + clarityBandGains[i]).coerceIn(-14.0f, 14.0f)
-                setBand(i, EqBand(true, EQ_FREQUENCIES[i].toFloat(), totalGain))
-            }
-        }
-
-        // 4. Output Peak Limiter (Brickwall peak protection against clipping overs)
+        // Output Peak Limiter (Brickwall peak protection against clipping overs)
         val limiter = Limiter(
             true,                     // inUse
             isPowerOn,                // enabled
@@ -190,40 +157,123 @@ object DynamicsProcessingTranslator {
             LimiterSpec.POST_GAIN_DB      // must be 0dB (prevents duplicate master gain application)
         )
 
-        // 5. Level-independent gain staging
-        // Every static gain in the chain above the limiter — bass Pre-EQ, the maximiser's
-        // make-up gain and the post-EQ/clarity boosts — is compensated at the input. Without
-        // that, a fixed boost pushes louder material into the limiter and quieter material
-        // not at all, which is exactly why the same setting sounded strong at low volume and
-        // nearly inaudible at high volume.
         val headroomCompensationDb = calculateHeadroomCompensationDb(
             bass,
             eqGains,
             clarity,
             headphonePlan,
-            dynamicBoost
+            if (tier != DynamicsTier.TIER_3_ESSENTIAL) dynamicBoost else 0.0f
         )
         val finalInputGainDb = (
             masterGainDb - headroomCompensationDb + (headphonePlan?.preampDb ?: 0.0f)
             ).coerceIn(-24.0f, 6.0f)
 
-        return Config.Builder(
-            DynamicsProcessing.VARIANT_FAVOR_TIME_RESOLUTION,
-            channelCount,
-            true,  // usePreEq
-            preEqBandCount,
-            true,  // useMbc
-            4,     // mbcBandCount
-            true,  // usePostEq
-            10,    // postEqBandCount
-            true   // useLimiter
-        ).apply {
-            setInputGainAllChannelsTo(finalInputGainDb)
-            setPreEqAllChannelsTo(preEq)
-            setMbcAllChannelsTo(mbc)
-            setPostEqAllChannelsTo(postEq)
-            setLimiterAllChannelsTo(limiter)
-        }.build()
+        val clarityBandGains = FxSoundResponseTables.fidelityBandGainsDb(clarity)
+        val bassBandGains = FxSoundResponseTables.bassBandGainsDb(bass)
+
+        return when (tier) {
+            DynamicsTier.TIER_1_FULL -> {
+                var preEqBandCount = 10
+                val preEq: Eq = if (headphonePlan != null) {
+                    preEqBandCount = headphonePlan.bands.size
+                    Eq(true, isPowerOn, headphonePlan.bands.size).apply {
+                        for ((i, band) in headphonePlan.bands.withIndex()) {
+                            setBand(i, EqBand(true, band.frequencyHz, band.gainDb))
+                        }
+                    }
+                } else {
+                    Eq(true, isPowerOn, 10).apply {
+                        for (i in 0 until 10) {
+                            setBand(i, EqBand(true, EQ_FREQUENCIES[i].toFloat(), bassBandGains[i]))
+                        }
+                    }
+                }
+
+                val postEq = Eq(true, isPowerOn, 10).apply {
+                    for (i in 0 until 10) {
+                        val userGain = eqGains.getOrElse(i) { 0.0f }
+                        val totalGain = (userGain + clarityBandGains[i]).coerceIn(-14.0f, 14.0f)
+                        setBand(i, EqBand(true, EQ_FREQUENCIES[i].toFloat(), totalGain))
+                    }
+                }
+
+                Config.Builder(
+                    DynamicsProcessing.VARIANT_FAVOR_TIME_RESOLUTION,
+                    channelCount,
+                    true,  // usePreEq
+                    preEqBandCount,
+                    true,  // useMbc
+                    4,     // mbcBandCount
+                    true,  // usePostEq
+                    10,    // postEqBandCount
+                    true   // useLimiter
+                ).apply {
+                    setInputGainAllChannelsTo(finalInputGainDb)
+                    setPreEqAllChannelsTo(preEq)
+                    setMbcAllChannelsTo(mbc)
+                    setPostEqAllChannelsTo(postEq)
+                    setLimiterAllChannelsTo(limiter)
+                }.build()
+            }
+
+            DynamicsTier.TIER_2_STREAMLINED -> {
+                // Tier 2: Streamlined combined EQ stage + 4-band MBC + Limiter
+                // Halves total stage count to fit memory-constrained OEM HALs (Samsung One UI, Motorola, MediaTek)
+                val combinedEq = Eq(true, isPowerOn, 10).apply {
+                    for (i in 0 until 10) {
+                        val userGain = eqGains.getOrElse(i) { 0.0f }
+                        val bassGain = if (headphonePlan == null) bassBandGains[i] else 0.0f
+                        val totalGain = (userGain + bassGain + clarityBandGains[i]).coerceIn(-14.0f, 14.0f)
+                        setBand(i, EqBand(true, EQ_FREQUENCIES[i].toFloat(), totalGain))
+                    }
+                }
+
+                Config.Builder(
+                    DynamicsProcessing.VARIANT_FAVOR_TIME_RESOLUTION,
+                    channelCount,
+                    false, // usePreEq disabled to stay under HAL buffer allocation
+                    0,
+                    true,  // useMbc
+                    4,     // mbcBandCount
+                    true,  // usePostEq
+                    10,    // postEqBandCount
+                    true   // useLimiter
+                ).apply {
+                    setInputGainAllChannelsTo(finalInputGainDb)
+                    setMbcAllChannelsTo(mbc)
+                    setPostEqAllChannelsTo(combinedEq)
+                    setLimiterAllChannelsTo(limiter)
+                }.build()
+            }
+
+            DynamicsTier.TIER_3_ESSENTIAL -> {
+                // Tier 3: Essential combined EQ + Limiter (no MBC) for ultra-restricted OEM HALs
+                val combinedEq = Eq(true, isPowerOn, 10).apply {
+                    for (i in 0 until 10) {
+                        val userGain = eqGains.getOrElse(i) { 0.0f }
+                        val bassGain = if (headphonePlan == null) bassBandGains[i] else 0.0f
+                        val totalGain = (userGain + bassGain + clarityBandGains[i]).coerceIn(-14.0f, 14.0f)
+                        setBand(i, EqBand(true, EQ_FREQUENCIES[i].toFloat(), totalGain))
+                    }
+                }
+
+                Config.Builder(
+                    DynamicsProcessing.VARIANT_FAVOR_TIME_RESOLUTION,
+                    channelCount,
+                    false, // usePreEq
+                    0,
+                    false, // useMbc
+                    0,
+                    true,  // usePostEq
+                    10,    // postEqBandCount
+                    true   // useLimiter
+                ).apply {
+                    setInputGainAllChannelsTo(finalInputGainDb)
+                    setPostEqAllChannelsTo(combinedEq)
+                    setLimiterAllChannelsTo(limiter)
+                }.build()
+            }
+        }
     }
 
     /**

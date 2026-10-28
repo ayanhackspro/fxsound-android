@@ -3,6 +3,10 @@
 build/
 app/build/
 app/.cxx/
+captures/
+.externalNativeBuild/
+*.apk
+*.aab
 
 # Gradle distribution cache used by the wrapper
 gradle/temp/
@@ -18,3 +22,18 @@ local.properties
 # clangd / compile database artifacts
 .clangd
 compile_commands.json
+
+# Documentation and Specifications
+docs/
+manifest.json
+
+# AI Agent Prompts and Configuration
+ANTIGRAVITY_MASTER_PROMPT.md
+AGENTS.md
+.agent/
+.claude/
+
+# OS generated files & Logs
+.DS_Store
+Thumbs.db
+*.log

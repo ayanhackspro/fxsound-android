@@ -22,7 +22,10 @@ import kotlinx.coroutines.sync.withLock
  *  - Selection persistence: the user's chosen profile is serialized into DataStore
  *    (see FxSoundPreferencesDataStore) and restored across restarts.
  */
-class OpraRepository(private val context: Context) {
+class OpraRepository(
+    private val context: Context? = null,
+    private val baseDir: File? = null
+) {
 
     sealed class LoadState {
         data object NotLoaded : LoadState()
@@ -47,16 +50,18 @@ class OpraRepository(private val context: Context) {
         data object None : SelectionUiState()
         data class Pending(val plan: HeadphoneEqPlan) : SelectionUiState()
         data class Applied(val plan: HeadphoneEqPlan) : SelectionUiState()
+        data class Unavailable(val plan: HeadphoneEqPlan, val reason: String) : SelectionUiState()
 
         val planOrNull: HeadphoneEqPlan?
             get() = when (this) {
                 is Applied -> plan
                 is Pending -> plan
+                is Unavailable -> plan
                 else -> null
             }
     }
 
-    private val cacheDir: File get() = File(context.filesDir, "opra")
+    private val cacheDir: File get() = baseDir ?: File(context?.filesDir, "opra")
     private val databaseFile: File get() = OpraCache.database(cacheDir)
     private val metaFile: File get() = File(cacheDir, "version_info")
 
@@ -365,10 +370,24 @@ class OpraRepository(private val context: Context) {
     }
 
     /** The companion service acknowledges a successful DynamicsProcessing attach. */
-    fun confirmApplied(success: Boolean) {
+    fun confirmApplied(success: Boolean, reason: String? = null) {
         _selectionState.value = when (val current = _selectionState.value) {
-            is SelectionUiState.Pending -> if (success) SelectionUiState.Applied(current.plan) else current
-            else -> current
+            is SelectionUiState.Pending -> if (success) {
+                SelectionUiState.Applied(current.plan)
+            } else {
+                SelectionUiState.Unavailable(current.plan, reason ?: "DynamicsProcessing attach rejected by audio service")
+            }
+            is SelectionUiState.Applied -> if (success) {
+                current
+            } else {
+                SelectionUiState.Unavailable(current.plan, reason ?: "Renderer teardown or attach failure")
+            }
+            is SelectionUiState.Unavailable -> if (success) {
+                SelectionUiState.Applied(current.plan)
+            } else {
+                if (reason != null) SelectionUiState.Unavailable(current.plan, reason) else current
+            }
+            SelectionUiState.None -> current
         }
     }
 
