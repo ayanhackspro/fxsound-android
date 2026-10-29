@@ -369,7 +369,7 @@ class SessionCompanionService : Service() {
         // 2. BassBoost on Session 0 — only when DynamicsProcessing does not provide HyperBass
         val bassStrategy = DynamicsProcessingTranslator.resolveBassStrategy(
             hasDynamicsProcessing = session.dynamicsProcessing != null,
-            bassEffectValue = state.effects[FxSoundEffectId.BASS] ?: 4.0f,
+            bassEffectValue = state.effects[FxSoundEffectId.BASS] ?: FxSoundEffectId.BASS.defaultValue,
             headphonePlanActive = state.headphonePlan != null
         )
         session.usesPreEqHyperBass = bassStrategy.usesPreEqHyperBass
@@ -454,7 +454,7 @@ class SessionCompanionService : Service() {
             // 2. BassBoost (Low-end resonance) — only when DynamicsProcessing does not provide HyperBass
             val bassStrategy = DynamicsProcessingTranslator.resolveBassStrategy(
                 hasDynamicsProcessing = session.dynamicsProcessing != null,
-                bassEffectValue = state.effects[FxSoundEffectId.BASS] ?: 4.0f,
+                bassEffectValue = state.effects[FxSoundEffectId.BASS] ?: FxSoundEffectId.BASS.defaultValue,
                 headphonePlanActive = state.headphonePlan != null
             )
             session.usesPreEqHyperBass = bassStrategy.usesPreEqHyperBass
@@ -619,7 +619,7 @@ class SessionCompanionService : Service() {
         if (session.bassBoost == null) {
             val strategy = DynamicsProcessingTranslator.resolveBassStrategy(
                 hasDynamicsProcessing = false,
-                bassEffectValue = state.effects[FxSoundEffectId.BASS] ?: 4.0f,
+                bassEffectValue = state.effects[FxSoundEffectId.BASS] ?: FxSoundEffectId.BASS.defaultValue,
                 headphonePlanActive = state.headphonePlan != null
             )
             if (strategy.standaloneBassBoostStrength <= 0.toShort()) {
@@ -681,9 +681,9 @@ class SessionCompanionService : Service() {
             }
         }
 
-        val bassEffectValue = state.effects[FxSoundEffectId.BASS] ?: 4.0f
+        val bassEffectValue = state.effects[FxSoundEffectId.BASS] ?: FxSoundEffectId.BASS.defaultValue
         val virtStrength = DynamicsProcessingTranslator.translateVirtualizer(
-            state.effects[FxSoundEffectId.SURROUND] ?: 3.0f
+            state.effects[FxSoundEffectId.SURROUND] ?: FxSoundEffectId.SURROUND.defaultValue
         )
         val clarity = state.effects[FxSoundEffectId.FIDELITY] ?: FxSoundEffectId.FIDELITY.defaultValue
 
@@ -867,7 +867,7 @@ class SessionCompanionService : Service() {
             if (strengthSupported) {
                 virt.setStrength(
                     DynamicsProcessingTranslator.translateVirtualizer(
-                        state.effects[FxSoundEffectId.SURROUND] ?: 3.0f
+                        state.effects[FxSoundEffectId.SURROUND] ?: FxSoundEffectId.SURROUND.defaultValue
                     )
                 )
             }

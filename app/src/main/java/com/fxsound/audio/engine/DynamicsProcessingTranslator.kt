@@ -114,8 +114,8 @@ object DynamicsProcessingTranslator {
         tier: DynamicsTier = DynamicsTier.TIER_1_FULL
     ): Config {
         val clarity = effects[FxSoundEffectId.FIDELITY] ?: FxSoundEffectId.FIDELITY.defaultValue
-        val dynamicBoost = effects[FxSoundEffectId.DYNAMIC_BOOST] ?: 4.0f
-        val bass = effects[FxSoundEffectId.BASS] ?: 4.0f
+        val dynamicBoost = effects[FxSoundEffectId.DYNAMIC_BOOST] ?: FxSoundEffectId.DYNAMIC_BOOST.defaultValue
+        val bass = effects[FxSoundEffectId.BASS] ?: FxSoundEffectId.BASS.defaultValue
 
         val channelCount = 2 // Stereo
 

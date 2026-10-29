@@ -7,6 +7,7 @@ import com.fxsound.audio.model.FxSoundUiState
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import kotlin.math.abs
 
 /**
  * The console and the renderer used to disagree: the faders showed the user's offset while
@@ -73,21 +74,32 @@ class EqResponseTest {
 
     @Test
     fun defaultBalancedIsGentlerThanTheOldPreset() {
-        // Version 1 shipped clarity 5.0, which measured +5.91 dB at 16 kHz. The "too crisp
-        // by default" report is about that curve, so the shipped default must stay a gentle
-        // presence lift rather than a treble booster.
+        // Version 1 shipped clarity 5.0, which measured +5.91 dB at 16 kHz. Balanced is now a
+        // preset rather than the first-run state, but it must still be a gentle presence lift,
+        // not a treble booster.
         val balanced = FxSoundPreset.BALANCED
         assertTrue("Balanced clarity must be a gentle lift", balanced.clarity in 1.0f..3.0f)
 
         val air = FxSoundResponseTables.fidelityBandGainsDb(balanced.clarity).last()
         assertTrue("Balanced must not boost 16 kHz by more than 3 dB (was $air)", air <= 3.0f)
+    }
 
+    @Test
+    fun aFreshInstallStartsNeutral() {
+        // First launch must not colour the user's audio: every effect is 0, every fader is
+        // 0 dB, and no preset is claimed until the user picks one.
         val state = FxSoundUiState()
-        assertEquals(
-            "Default state must use the same gentle clarity",
-            balanced.clarity,
-            state.effects[FxSoundEffectId.FIDELITY] ?: -1f,
-            0.001f
-        )
+
+        assertEquals(FxSoundPreset.NEUTRAL.id, state.currentPresetId)
+        for (effect in FxSoundEffectId.entries) {
+            assertEquals(
+                "${effect.displayName} must start at 0",
+                0.0f,
+                state.effects[effect] ?: -1f,
+                0.001f
+            )
+        }
+        assertEquals(List(10) { 0.0f }, state.eqGains)
+        assertTrue("A neutral state must render a flat curve", EqResponse.effectiveGains(state).all { abs(it) < 0.001f })
     }
 }

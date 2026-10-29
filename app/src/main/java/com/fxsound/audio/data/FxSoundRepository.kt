@@ -169,10 +169,10 @@ object FxSoundRepository {
             name = trimmedName,
             description = description.trim(),
             clarity = current.effects[FxSoundEffectId.FIDELITY] ?: FxSoundEffectId.FIDELITY.defaultValue,
-            ambience = current.effects[FxSoundEffectId.AMBIENCE] ?: 2.0f,
-            surround = current.effects[FxSoundEffectId.SURROUND] ?: 3.0f,
-            dynamicBoost = current.effects[FxSoundEffectId.DYNAMIC_BOOST] ?: 4.0f,
-            bass = current.effects[FxSoundEffectId.BASS] ?: 4.0f,
+            ambience = current.effects[FxSoundEffectId.AMBIENCE] ?: FxSoundEffectId.AMBIENCE.defaultValue,
+            surround = current.effects[FxSoundEffectId.SURROUND] ?: FxSoundEffectId.SURROUND.defaultValue,
+            dynamicBoost = current.effects[FxSoundEffectId.DYNAMIC_BOOST] ?: FxSoundEffectId.DYNAMIC_BOOST.defaultValue,
+            bass = current.effects[FxSoundEffectId.BASS] ?: FxSoundEffectId.BASS.defaultValue,
             eqGains = current.eqGains
         )
         _customPresets.value = _customPresets.value + preset

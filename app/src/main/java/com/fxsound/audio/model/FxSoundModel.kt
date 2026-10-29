@@ -2,23 +2,27 @@ package com.fxsound.audio.model
 
 /**
  * FxSound Core Effect Identifiers matching upstream DfxDsp and FxSound Engine.
+ *
+ * [defaultValue] is the value a fresh install starts with, so every effect defaults to 0:
+ * the first launch is a neutral, uncoloured chain. Users opt into colour by moving a slider
+ * or applying a preset. (Balanced is a preset, not the first-run state.)
  */
 enum class FxSoundEffectId(
     val id: Int,
     val displayName: String,
     val description: String,
-    val defaultValue: Float = 5.0f
+    val defaultValue: Float = 0.0f
 ) {
     /**
      * Clarity is an aural exciter, not a neutral control: at 5.0 it measures +5.9 dB at
-     * 16 kHz and +5.4 dB at 4 kHz. Real-device feedback called that "too crisp" by default,
-     * so the shipped default is a gentler +2.8 dB at 16 kHz. See docs/VOICE_CRISPNESS_FIX.md.
+     * 16 kHz and +5.4 dB at 4 kHz, which is why the Balanced preset was lowered to 2.0
+     * (+2.8 dB at 16 kHz). See docs/VOICE_CRISPNESS_FIX.md.
      */
-    FIDELITY(0, "Clarity", "Aural exciter for crisp highs and harmonic definition", 2.0f),
-    AMBIENCE(1, "Ambience", "Harmonic stereo space, depth, and reflections", 2.0f),
-    SURROUND(2, "Surround", "3D soundstage widening for immersive listening", 3.0f),
-    DYNAMIC_BOOST(3, "Dynamic Boost", "Intelligent multi-band maximizer and volume leveler", 4.0f),
-    BASS(4, "Bass Boost", "HyperBass low-frequency acoustic depth", 4.0f);
+    FIDELITY(0, "Clarity", "Aural exciter for crisp highs and harmonic definition", 0.0f),
+    AMBIENCE(1, "Ambience", "Harmonic stereo space, depth, and reflections", 0.0f),
+    SURROUND(2, "Surround", "3D soundstage widening for immersive listening", 0.0f),
+    DYNAMIC_BOOST(3, "Dynamic Boost", "Intelligent multi-band maximizer and volume leveler", 0.0f),
+    BASS(4, "Bass Boost", "HyperBass low-frequency acoustic depth", 0.0f);
 
     companion object {
         val CLARITY: FxSoundEffectId get() = FIDELITY
@@ -201,13 +205,13 @@ data class FxSoundUiState(
     val routeStatus: RouteStatus = RouteStatus.READY,
     val activePackageName: String? = null,
     val activeAudioSessionId: Int = 0,
-    val currentPresetId: String = FxSoundPreset.BALANCED.id,
+    val currentPresetId: String = FxSoundPreset.NEUTRAL.id,
     val effects: Map<FxSoundEffectId, Float> = mapOf(
         FxSoundEffectId.FIDELITY to FxSoundEffectId.FIDELITY.defaultValue,
-        FxSoundEffectId.AMBIENCE to 2.0f,
-        FxSoundEffectId.SURROUND to 3.0f,
-        FxSoundEffectId.DYNAMIC_BOOST to 4.0f,
-        FxSoundEffectId.BASS to 4.0f
+        FxSoundEffectId.AMBIENCE to FxSoundEffectId.AMBIENCE.defaultValue,
+        FxSoundEffectId.SURROUND to FxSoundEffectId.SURROUND.defaultValue,
+        FxSoundEffectId.DYNAMIC_BOOST to FxSoundEffectId.DYNAMIC_BOOST.defaultValue,
+        FxSoundEffectId.BASS to FxSoundEffectId.BASS.defaultValue
     ),
     val eqGains: List<Float> = List(10) { 0.0f },
     val masterGainDb: Float = 0.0f,

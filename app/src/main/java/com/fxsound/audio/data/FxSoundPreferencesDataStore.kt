@@ -53,14 +53,17 @@ class FxSoundPreferencesDataStore(private val context: Context) {
         return try {
             val prefs = context.dataStore.data.first()
             val isPowerOn = prefs[KEY_POWER_ON] ?: true
-            val presetId = prefs[KEY_PRESET_ID] ?: FxSoundPreset.BALANCED.id
+            // No saved value means this is a first launch: start neutral (all effects at 0,
+            // preset NEUTRAL) instead of pre-colouring the user's audio. Existing installs
+            // always have these keys written by saveState, so their config is untouched.
+            val presetId = prefs[KEY_PRESET_ID] ?: FxSoundPreset.NEUTRAL.id
 
             val effectsMap = mapOf(
                 FxSoundEffectId.FIDELITY to (prefs[KEY_EFFECT_FIDELITY] ?: FxSoundEffectId.FIDELITY.defaultValue),
-                FxSoundEffectId.AMBIENCE to (prefs[KEY_EFFECT_AMBIENCE] ?: 2.0f),
-                FxSoundEffectId.SURROUND to (prefs[KEY_EFFECT_SURROUND] ?: 3.0f),
-                FxSoundEffectId.DYNAMIC_BOOST to (prefs[KEY_EFFECT_DYNAMIC_BOOST] ?: 4.0f),
-                FxSoundEffectId.BASS to (prefs[KEY_EFFECT_BASS] ?: 4.0f)
+                FxSoundEffectId.AMBIENCE to (prefs[KEY_EFFECT_AMBIENCE] ?: FxSoundEffectId.AMBIENCE.defaultValue),
+                FxSoundEffectId.SURROUND to (prefs[KEY_EFFECT_SURROUND] ?: FxSoundEffectId.SURROUND.defaultValue),
+                FxSoundEffectId.DYNAMIC_BOOST to (prefs[KEY_EFFECT_DYNAMIC_BOOST] ?: FxSoundEffectId.DYNAMIC_BOOST.defaultValue),
+                FxSoundEffectId.BASS to (prefs[KEY_EFFECT_BASS] ?: FxSoundEffectId.BASS.defaultValue)
             )
 
             val eqCsv = prefs[KEY_EQ_GAINS]
@@ -117,10 +120,10 @@ class FxSoundPreferencesDataStore(private val context: Context) {
                 prefs[KEY_POWER_ON] = state.isPowerOn
                 prefs[KEY_PRESET_ID] = state.currentPresetId
                 prefs[KEY_EFFECT_FIDELITY] = state.effects[FxSoundEffectId.FIDELITY] ?: FxSoundEffectId.FIDELITY.defaultValue
-                prefs[KEY_EFFECT_AMBIENCE] = state.effects[FxSoundEffectId.AMBIENCE] ?: 2.0f
-                prefs[KEY_EFFECT_SURROUND] = state.effects[FxSoundEffectId.SURROUND] ?: 3.0f
-                prefs[KEY_EFFECT_DYNAMIC_BOOST] = state.effects[FxSoundEffectId.DYNAMIC_BOOST] ?: 4.0f
-                prefs[KEY_EFFECT_BASS] = state.effects[FxSoundEffectId.BASS] ?: 4.0f
+                prefs[KEY_EFFECT_AMBIENCE] = state.effects[FxSoundEffectId.AMBIENCE] ?: FxSoundEffectId.AMBIENCE.defaultValue
+                prefs[KEY_EFFECT_SURROUND] = state.effects[FxSoundEffectId.SURROUND] ?: FxSoundEffectId.SURROUND.defaultValue
+                prefs[KEY_EFFECT_DYNAMIC_BOOST] = state.effects[FxSoundEffectId.DYNAMIC_BOOST] ?: FxSoundEffectId.DYNAMIC_BOOST.defaultValue
+                prefs[KEY_EFFECT_BASS] = state.effects[FxSoundEffectId.BASS] ?: FxSoundEffectId.BASS.defaultValue
                 prefs[KEY_EQ_GAINS] = state.eqGains.joinToString(",") { String.format("%.2f", it) }
                 prefs[KEY_MASTER_GAIN] = state.masterGainDb
                 prefs[KEY_HAPTICS_MODE] = state.hapticsMode.name

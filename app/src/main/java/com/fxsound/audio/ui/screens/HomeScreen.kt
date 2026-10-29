@@ -335,7 +335,7 @@ fun HomeScreen(
                 EffectSlider(
                     name = "Surround Sound",
                     description = "Stereo soundstage widening for expansive acoustic space",
-                    value = state.effects[FxSoundEffectId.SURROUND] ?: 3.0f,
+                    value = state.effects[FxSoundEffectId.SURROUND] ?: FxSoundEffectId.SURROUND.defaultValue,
                     onValueChange = { FxSoundRepository.setEffect(FxSoundEffectId.SURROUND, it) },
                     hapticsManager = hapticsManager,
                     enabled = state.isPowerOn && surroundUsable,
@@ -346,7 +346,7 @@ fun HomeScreen(
                 EffectSlider(
                     name = "Dynamic Boost",
                     description = "Multiband dynamics maximizer and transparent loudness leveler",
-                    value = state.effects[FxSoundEffectId.DYNAMIC_BOOST] ?: 4.0f,
+                    value = state.effects[FxSoundEffectId.DYNAMIC_BOOST] ?: FxSoundEffectId.DYNAMIC_BOOST.defaultValue,
                     onValueChange = { FxSoundRepository.setEffect(FxSoundEffectId.DYNAMIC_BOOST, it) },
                     hapticsManager = hapticsManager,
                     enabled = state.isPowerOn
@@ -367,7 +367,7 @@ fun HomeScreen(
                         "Low frequencies are shaped by the active headphone profile"
                     else
                         "HyperBass low-frequency acoustic depth and punch",
-                    value = state.effects[FxSoundEffectId.BASS] ?: 4.0f,
+                    value = state.effects[FxSoundEffectId.BASS] ?: FxSoundEffectId.BASS.defaultValue,
                     onValueChange = { FxSoundRepository.setEffect(FxSoundEffectId.BASS, it) },
                     hapticsManager = hapticsManager,
                     enabled = state.isPowerOn && !headphonePlanActive && !bassUnavailable,
