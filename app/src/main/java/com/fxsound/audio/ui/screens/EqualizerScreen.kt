@@ -39,6 +39,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.fxsound.audio.R
 import com.fxsound.audio.data.FxSoundRepository
+import com.fxsound.audio.engine.EqResponse
 import com.fxsound.audio.haptics.HapticsManager
 import com.fxsound.audio.model.EqRendererKind
 import com.fxsound.audio.model.StageState
@@ -63,6 +64,12 @@ fun EqualizerScreen(
 ) {
     val state by FxSoundRepository.uiState.collectAsState()
     val scrollState = rememberScrollState()
+
+    // The renderer applies the fader offset PLUS the Clarity exciter curve. Showing only
+    // the offset here is what made "flat" sound bright and made a -14 dB fader only cut
+    // ~8 dB. The console now shows the gain that is actually applied.
+    val effectiveGains = EqResponse.effectiveGains(state)
+    val clarityAirDb = EqResponse.clarityCurveDb(state.effects).lastOrNull() ?: 0.0f
 
     val freqShortLabels = listOf("32", "64", "125", "250", "500", "1k", "2k", "4k", "8k", "16k")
 
@@ -104,7 +111,7 @@ fun EqualizerScreen(
             ) {
                 Icon(
                     painter = painterResource(R.drawable.ic_refresh),
-                    contentDescription = "Reset EQ to Flat",
+                    contentDescription = "Reset tone to flat",
                     tint = FxRedPrimary,
                     modifier = Modifier.padding(end = 4.dp).size(16.dp)
                 )
@@ -112,11 +119,24 @@ fun EqualizerScreen(
             }
         }
 
+        if (clarityAirDb > 0.1f) {
+            Text(
+                text = "This curve already includes Clarity (+" +
+                    String.format("%.1f", clarityAirDb) +
+                    " dB at 16 kHz). Pull the high faders below 0 to cut it; " +
+                    "Flat also sets Clarity to 0.",
+                color = TextTertiary,
+                fontSize = 11.sp,
+                lineHeight = 15.sp,
+                modifier = Modifier.padding(top = 10.dp)
+            )
+        }
+
         Spacer(modifier = Modifier.height(18.dp))
 
         // Visual EQ Response Curve
         EqualizerCurveView(
-            eqGains = state.eqGains,
+            eqGains = effectiveGains,
             isPowerOn = state.isPowerOn
         )
 
@@ -184,11 +204,14 @@ fun EqualizerScreen(
 
                     // 10 Vertical Frequency Faders
                     for (i in 0 until 10) {
-                        val gain = state.eqGains.getOrElse(i) { 0.0f }
+                        val gain = effectiveGains.getOrElse(i) { 0.0f }
                         VerticalEqualizerFader(
                             gain = gain,
                             onGainChange = { newVal ->
-                                FxSoundRepository.setEqBand(i, newVal)
+                                FxSoundRepository.setEqBand(
+                                    i,
+                                    EqResponse.offsetFor(newVal, i, state)
+                                )
                             },
                             frequencyLabel = freqShortLabels[i],
                             hapticsManager = hapticsManager,

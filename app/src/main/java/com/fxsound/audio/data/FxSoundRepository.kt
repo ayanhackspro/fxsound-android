@@ -1,6 +1,7 @@
 package com.fxsound.audio.data
 
 import android.content.Context
+import com.fxsound.audio.engine.EqResponse
 import com.fxsound.audio.model.AcousticMetrics
 import com.fxsound.audio.model.AudioOutputDeviceType
 import com.fxsound.audio.model.EqRendererInfo
@@ -21,6 +22,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlin.math.abs
 
 /**
  * Central thread-safe State Repository for FxSound.
@@ -60,18 +62,24 @@ object FxSoundRepository {
         initOpra(context.applicationContext)
         repoScope.launch {
             val savedState = dataStore.loadState()
+            val toneSchema = dataStore.loadToneSchemaVersion()
+            val restoredState = migrateToneSchema(savedState, toneSchema)
             _uiState.update { current ->
                 current.copy(
-                    isPowerOn = savedState.isPowerOn,
-                    currentPresetId = savedState.currentPresetId,
-                    effects = savedState.effects,
-                    eqGains = savedState.eqGains,
-                    masterGainDb = savedState.masterGainDb,
-                    hapticsMode = savedState.hapticsMode,
-                    latencyMode = savedState.latencyMode
+                    isPowerOn = restoredState.isPowerOn,
+                    currentPresetId = restoredState.currentPresetId,
+                    effects = restoredState.effects,
+                    eqGains = restoredState.eqGains,
+                    masterGainDb = restoredState.masterGainDb,
+                    hapticsMode = restoredState.hapticsMode,
+                    latencyMode = restoredState.latencyMode
                 )
             }
             notifyStateChanged()
+            if (toneSchema < FxSoundPreferencesDataStore.TONE_SCHEMA_VERSION) {
+                // Persist the migrated tuning and the new schema marker.
+                scheduleSave()
+            }
 
             // Custom presets load in the same bootstrap window as the saved UI state.
             _customPresets.value = dataStore.loadCustomPresets()
@@ -84,6 +92,26 @@ object FxSoundRepository {
                 // Headphone plan restore must never break app startup (ADR-009).
             }
         }
+    }
+
+    /**
+     * Version 1 persisted Balanced with Clarity 5.0 and a flat fader console, which measured
+     * +5.9 dB at 16 kHz and read as harsh on real headphones. Version 2 ships a gentler
+     * Balanced curve. Only a completely untouched Balanced setup is migrated; any custom
+     * effect value or EQ fader is left exactly as the user saved it.
+     */
+    private fun migrateToneSchema(state: FxSoundUiState, schema: Int): FxSoundUiState {
+        if (schema >= FxSoundPreferencesDataStore.TONE_SCHEMA_VERSION) return state
+        val untouchedBalanced =
+            state.currentPresetId == FxSoundPreset.BALANCED.id &&
+                state.effects[FxSoundEffectId.FIDELITY] == 5.0f &&
+                state.eqGains.all { abs(it) < 0.01f }
+        if (!untouchedBalanced) return state
+        return state.copy(
+            effects = state.effects + (
+                FxSoundEffectId.FIDELITY to FxSoundPreset.BALANCED.clarity
+                )
+        )
     }
 
     // OPRA headphone-tuning plan (companion path). The plan lives in uiState so the
@@ -140,7 +168,7 @@ object FxSoundRepository {
             id = "user_" + System.currentTimeMillis(),
             name = trimmedName,
             description = description.trim(),
-            clarity = current.effects[FxSoundEffectId.FIDELITY] ?: 5.0f,
+            clarity = current.effects[FxSoundEffectId.FIDELITY] ?: FxSoundEffectId.FIDELITY.defaultValue,
             ambience = current.effects[FxSoundEffectId.AMBIENCE] ?: 2.0f,
             surround = current.effects[FxSoundEffectId.SURROUND] ?: 3.0f,
             dynamicBoost = current.effects[FxSoundEffectId.DYNAMIC_BOOST] ?: 4.0f,
@@ -221,16 +249,27 @@ object FxSoundRepository {
         if (bandIndex !in 0..9) return
         _uiState.update { current ->
             val updated = current.eqGains.toMutableList()
-            updated[bandIndex] = gainDb.coerceIn(-14.0f, 14.0f)
+            // Stored value is the *offset*; the UI passes the effective dB it wants and
+            // converts through EqResponse.offsetFor first.
+            updated[bandIndex] = gainDb.coerceIn(EqResponse.OFFSET_MIN_DB, EqResponse.OFFSET_MAX_DB)
             current.copy(eqGains = updated, currentPresetId = "custom")
         }
         notifyStateChanged()
         scheduleSave()
     }
 
+    /**
+     * Flattens the tone curve. This must clear the clarity exciter too: the exciter is part
+     * of the rendered EQ, so zeroing only the fader offsets would still leave +5.9 dB at
+     * 16 kHz on the old Balanced default and the button would be lying.
+     */
     fun resetEq() {
         _uiState.update { current ->
-            current.copy(eqGains = List(10) { 0.0f })
+            current.copy(
+                eqGains = List(10) { 0.0f },
+                effects = current.effects + (FxSoundEffectId.FIDELITY to 0.0f),
+                currentPresetId = "custom"
+            )
         }
         notifyStateChanged()
         scheduleSave()

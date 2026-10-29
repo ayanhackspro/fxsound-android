@@ -113,7 +113,7 @@ object DynamicsProcessingTranslator {
         headphonePlan: com.fxsound.audio.opra.HeadphoneEqPlan? = null,
         tier: DynamicsTier = DynamicsTier.TIER_1_FULL
     ): Config {
-        val clarity = effects[FxSoundEffectId.FIDELITY] ?: 5.0f
+        val clarity = effects[FxSoundEffectId.FIDELITY] ?: FxSoundEffectId.FIDELITY.defaultValue
         val dynamicBoost = effects[FxSoundEffectId.DYNAMIC_BOOST] ?: 4.0f
         val bass = effects[FxSoundEffectId.BASS] ?: 4.0f
 
@@ -303,7 +303,7 @@ object DynamicsProcessingTranslator {
     fun calculateHeadroomCompensationDb(
         bassEffectValue: Float,
         eqGains: List<Float>,
-        clarityEffectValue: Float = 5.0f,
+        clarityEffectValue: Float = FxSoundEffectId.FIDELITY.defaultValue,
         headphonePlan: com.fxsound.audio.opra.HeadphoneEqPlan? = null,
         dynamicBoostEffectValue: Float = 0.0f
     ): Float {
@@ -314,8 +314,10 @@ object DynamicsProcessingTranslator {
         var positiveGainSum = 0.0f
         for (i in 0 until 10) {
             // The clarity contribution lives in the Post-EQ, so it is part of the peak the
-            // preamp has to make room for.
-            val totalGain = eqGains.getOrElse(i) { 0.0f } + clarityBandGains[i]
+            // preamp has to make room for. Clamp exactly like the renderer does, otherwise a
+            // large fader offset that the post-EQ truncates would still over-compensate.
+            val totalGain = (eqGains.getOrElse(i) { 0.0f } + clarityBandGains[i])
+                .coerceIn(EqResponse.BAND_MIN_DB, EqResponse.BAND_MAX_DB)
             if (totalGain > 0.0f) {
                 positiveGainSum += totalGain
             }

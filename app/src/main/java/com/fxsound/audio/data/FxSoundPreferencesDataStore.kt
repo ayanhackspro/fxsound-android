@@ -6,6 +6,7 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.floatPreferencesKey
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.fxsound.audio.model.FxSoundEffectId
@@ -24,6 +25,15 @@ private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(na
 class FxSoundPreferencesDataStore(private val context: Context) {
 
     companion object {
+        /**
+         * Bumped whenever the meaning of the persisted tone settings changes. Version 1
+         * shipped Balanced with Clarity 5.0 (+5.9 dB at 16 kHz); version 2 ships the gentler
+         * Balanced curve. The repository uses this to re-apply the preset only for users who
+         * never customised it.
+         */
+        const val TONE_SCHEMA_VERSION = 2
+
+        private val KEY_TONE_SCHEMA = intPreferencesKey("tone_schema_version")
         private val KEY_POWER_ON = booleanPreferencesKey("power_on")
         private val KEY_PRESET_ID = stringPreferencesKey("preset_id")
         private val KEY_EFFECT_FIDELITY = floatPreferencesKey("effect_fidelity")
@@ -46,7 +56,7 @@ class FxSoundPreferencesDataStore(private val context: Context) {
             val presetId = prefs[KEY_PRESET_ID] ?: FxSoundPreset.BALANCED.id
 
             val effectsMap = mapOf(
-                FxSoundEffectId.FIDELITY to (prefs[KEY_EFFECT_FIDELITY] ?: 5.0f),
+                FxSoundEffectId.FIDELITY to (prefs[KEY_EFFECT_FIDELITY] ?: FxSoundEffectId.FIDELITY.defaultValue),
                 FxSoundEffectId.AMBIENCE to (prefs[KEY_EFFECT_AMBIENCE] ?: 2.0f),
                 FxSoundEffectId.SURROUND to (prefs[KEY_EFFECT_SURROUND] ?: 3.0f),
                 FxSoundEffectId.DYNAMIC_BOOST to (prefs[KEY_EFFECT_DYNAMIC_BOOST] ?: 4.0f),
@@ -89,12 +99,24 @@ class FxSoundPreferencesDataStore(private val context: Context) {
         }
     }
 
+    /**
+     * The tone-settings schema the saved state was written with. Missing means version 1
+     * (the first shipped build), because that build never wrote the key.
+     */
+    suspend fun loadToneSchemaVersion(): Int {
+        return try {
+            context.dataStore.data.first()[KEY_TONE_SCHEMA] ?: 1
+        } catch (e: Exception) {
+            1
+        }
+    }
+
     suspend fun saveState(state: FxSoundUiState) {
         try {
             context.dataStore.edit { prefs ->
                 prefs[KEY_POWER_ON] = state.isPowerOn
                 prefs[KEY_PRESET_ID] = state.currentPresetId
-                prefs[KEY_EFFECT_FIDELITY] = state.effects[FxSoundEffectId.FIDELITY] ?: 5.0f
+                prefs[KEY_EFFECT_FIDELITY] = state.effects[FxSoundEffectId.FIDELITY] ?: FxSoundEffectId.FIDELITY.defaultValue
                 prefs[KEY_EFFECT_AMBIENCE] = state.effects[FxSoundEffectId.AMBIENCE] ?: 2.0f
                 prefs[KEY_EFFECT_SURROUND] = state.effects[FxSoundEffectId.SURROUND] ?: 3.0f
                 prefs[KEY_EFFECT_DYNAMIC_BOOST] = state.effects[FxSoundEffectId.DYNAMIC_BOOST] ?: 4.0f
@@ -103,6 +125,7 @@ class FxSoundPreferencesDataStore(private val context: Context) {
                 prefs[KEY_MASTER_GAIN] = state.masterGainDb
                 prefs[KEY_HAPTICS_MODE] = state.hapticsMode.name
                 prefs[KEY_LATENCY_MODE] = state.latencyMode.name
+                prefs[KEY_TONE_SCHEMA] = TONE_SCHEMA_VERSION
             }
         } catch (e: Exception) {
             // Non-fatal persistence failure

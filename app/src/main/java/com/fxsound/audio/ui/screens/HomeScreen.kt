@@ -313,7 +313,7 @@ fun HomeScreen(
                 EffectSlider(
                     name = "Clarity",
                     description = "High-frequency harmonic exciter and vocal definition",
-                    value = state.effects[FxSoundEffectId.FIDELITY] ?: 5.0f,
+                    value = state.effects[FxSoundEffectId.FIDELITY] ?: FxSoundEffectId.FIDELITY.defaultValue,
                     onValueChange = { FxSoundRepository.setEffect(FxSoundEffectId.FIDELITY, it) },
                     hapticsManager = hapticsManager,
                     enabled = state.isPowerOn

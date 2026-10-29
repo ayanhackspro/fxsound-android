@@ -458,7 +458,10 @@ class SessionCompanionService : Service() {
                 headphonePlanActive = state.headphonePlan != null
             )
             session.usesPreEqHyperBass = bassStrategy.usesPreEqHyperBass
-            if (session.dynamicsProcessing == null && state.headphonePlan == null) {
+            if (session.bassBoost == null &&
+                session.dynamicsProcessing == null &&
+                state.headphonePlan == null
+            ) {
                 try {
                     val bass = BassBoost(EFFECT_PRIORITY, sessionId).apply {
                         setStrength(bassStrategy.standaloneBassBoostStrength)
@@ -470,9 +473,12 @@ class SessionCompanionService : Service() {
                     session.bassStage = StageState.UNSUPPORTED
                     Log.w(TAG, "BassBoost failed on session $sessionId: ${e.message}")
                 }
-            } else {
+            } else if (session.dynamicsProcessing != null || state.headphonePlan != null) {
+                // DynamicsProcessing carries HyperBass, or the OPRA plan owns the low end.
                 session.bassStage = StageState.BYPASSED
             }
+            // Otherwise attachFallbackForSession already attached the BassBoost and reported
+            // its stage; creating a second one here would leave the first untracked.
 
             // 3. Virtualizer (3D Surround soundstage widening)
             session.virtualizer = attachVirtualizer(session, state)
@@ -600,7 +606,7 @@ class SessionCompanionService : Service() {
         if (session.equalizer == null) {
             try {
                 val eq = Equalizer(EFFECT_PRIORITY, session.sessionId).apply {
-                    applyEqualizerBands(this, state.eqGains, state.effects[FxSoundEffectId.FIDELITY] ?: 5.0f)
+                    applyEqualizerBands(this, state.eqGains, state.effects[FxSoundEffectId.FIDELITY] ?: FxSoundEffectId.FIDELITY.defaultValue)
                     enabled = state.isPowerOn
                 }
                 session.equalizer = eq
@@ -611,17 +617,30 @@ class SessionCompanionService : Service() {
             }
         }
         if (session.bassBoost == null) {
-            try {
-                val bb = BassBoost(EFFECT_PRIORITY, session.sessionId).apply {
-                    val bassEffect = state.effects[FxSoundEffectId.BASS] ?: 4.0f
-                    setStrength((bassEffect * 100f).toInt().coerceIn(0, 1000).toShort())
-                    enabled = state.isPowerOn
+            val strategy = DynamicsProcessingTranslator.resolveBassStrategy(
+                hasDynamicsProcessing = false,
+                bassEffectValue = state.effects[FxSoundEffectId.BASS] ?: 4.0f,
+                headphonePlanActive = state.headphonePlan != null
+            )
+            if (strategy.standaloneBassBoostStrength <= 0.toShort()) {
+                // The OPRA plan owns the low end; a zero-strength BassBoost would only add
+                // an effect instance and a misleading "active" row.
+                session.bassStage = StageState.BYPASSED
+            } else {
+                try {
+                    val bb = BassBoost(EFFECT_PRIORITY, session.sessionId).apply {
+                        // Same capped strategy as the DynamicsProcessing path: the fallback has
+                        // no input-gain stage, so the standalone boost must not run at full strength.
+                        setStrength(strategy.standaloneBassBoostStrength)
+                        enabled = state.isPowerOn
+                    }
+                    session.bassBoost = bb
+                    session.bassStage = StageState.ACTIVE
+                    Log.i(TAG, "Fallback BassBoost attached with priority $EFFECT_PRIORITY on session ${session.sessionId}")
+                } catch (bbEx: Exception) {
+                    session.bassStage = StageState.UNSUPPORTED
+                    Log.w(TAG, "Fallback BassBoost failed on session ${session.sessionId}: ${bbEx.message}")
                 }
-                session.bassBoost = bb
-                session.bassStage = StageState.ACTIVE
-                Log.i(TAG, "Fallback BassBoost attached with priority $EFFECT_PRIORITY on session ${session.sessionId}")
-            } catch (bbEx: Exception) {
-                Log.w(TAG, "Fallback BassBoost failed on session ${session.sessionId}: ${bbEx.message}")
             }
         }
     }
@@ -666,7 +685,7 @@ class SessionCompanionService : Service() {
         val virtStrength = DynamicsProcessingTranslator.translateVirtualizer(
             state.effects[FxSoundEffectId.SURROUND] ?: 3.0f
         )
-        val clarity = state.effects[FxSoundEffectId.FIDELITY] ?: 5.0f
+        val clarity = state.effects[FxSoundEffectId.FIDELITY] ?: FxSoundEffectId.FIDELITY.defaultValue
 
         // Single processing chain (ADR-030): when any explicit app session is live, the
         // global mix stage must be silent. Otherwise the same audio can pass through both

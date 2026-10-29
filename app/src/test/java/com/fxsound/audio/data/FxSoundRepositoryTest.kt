@@ -52,14 +52,36 @@ class FxSoundRepositoryTest {
 
     @Test
     fun testEqBandClamping() {
-        FxSoundRepository.setEqBand(0, 20.0f)
-        assertEquals(14.0f, FxSoundRepository.uiState.value.eqGains[0], 0.001f)
+        FxSoundRepository.setEqBand(0, 40.0f)
+        assertEquals(
+            com.fxsound.audio.engine.EqResponse.OFFSET_MAX_DB,
+            FxSoundRepository.uiState.value.eqGains[0],
+            0.001f
+        )
 
-        FxSoundRepository.setEqBand(0, -25.0f)
-        assertEquals(-14.0f, FxSoundRepository.uiState.value.eqGains[0], 0.001f)
+        FxSoundRepository.setEqBand(0, -40.0f)
+        assertEquals(
+            com.fxsound.audio.engine.EqResponse.OFFSET_MIN_DB,
+            FxSoundRepository.uiState.value.eqGains[0],
+            0.001f
+        )
 
         // Invalid index should be ignored
         FxSoundRepository.setEqBand(15, 5.0f)
+    }
+
+    @Test
+    fun testResetEqFlattensTheRenderedResponseIncludingClarity() {
+        FxSoundRepository.setEffect(FxSoundEffectId.FIDELITY, 5.0f)
+        FxSoundRepository.setEqBand(9, -12.0f)
+
+        FxSoundRepository.resetEq()
+
+        val state = FxSoundRepository.uiState.value
+        assertEquals(0.0f, state.effects[FxSoundEffectId.FIDELITY] ?: -1f, 0.001f)
+        for (gain in com.fxsound.audio.engine.EqResponse.effectiveGains(state)) {
+            assertEquals("Flat must mean 0 dB on every band", 0.0f, gain, 0.001f)
+        }
     }
 
     @Test

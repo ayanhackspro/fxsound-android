@@ -9,7 +9,12 @@ enum class FxSoundEffectId(
     val description: String,
     val defaultValue: Float = 5.0f
 ) {
-    FIDELITY(0, "Clarity", "Aural exciter for crisp highs and harmonic definition", 5.0f),
+    /**
+     * Clarity is an aural exciter, not a neutral control: at 5.0 it measures +5.9 dB at
+     * 16 kHz and +5.4 dB at 4 kHz. Real-device feedback called that "too crisp" by default,
+     * so the shipped default is a gentler +2.8 dB at 16 kHz. See docs/VOICE_CRISPNESS_FIX.md.
+     */
+    FIDELITY(0, "Clarity", "Aural exciter for crisp highs and harmonic definition", 2.0f),
     AMBIENCE(1, "Ambience", "Harmonic stereo space, depth, and reflections", 2.0f),
     SURROUND(2, "Surround", "3D soundstage widening for immersive listening", 3.0f),
     DYNAMIC_BOOST(3, "Dynamic Boost", "Intelligent multi-band maximizer and volume leveler", 4.0f),
@@ -66,8 +71,8 @@ data class FxSoundPreset(
         val BALANCED = FxSoundPreset(
             id = "balanced",
             name = "Balanced",
-            description = "Crisp, bright balance with enhanced vocal clarity and presence",
-            clarity = 5.0f,
+            description = "Gentle presence lift with open highs and unclouded vocals",
+            clarity = 2.0f,
             ambience = 2.0f,
             surround = 3.0f,
             dynamicBoost = 4.0f,
@@ -198,7 +203,7 @@ data class FxSoundUiState(
     val activeAudioSessionId: Int = 0,
     val currentPresetId: String = FxSoundPreset.BALANCED.id,
     val effects: Map<FxSoundEffectId, Float> = mapOf(
-        FxSoundEffectId.FIDELITY to 5.0f,
+        FxSoundEffectId.FIDELITY to FxSoundEffectId.FIDELITY.defaultValue,
         FxSoundEffectId.AMBIENCE to 2.0f,
         FxSoundEffectId.SURROUND to 3.0f,
         FxSoundEffectId.DYNAMIC_BOOST to 4.0f,
